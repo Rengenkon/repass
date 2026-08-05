@@ -20,7 +20,7 @@ impl<'a> CountingSpliterator<'a> {
         }
     }
 
-    fn len(self: &Self, current_len: &usize, part: &'a str) -> (usize, String) {
+    fn len(self: &Self, current_len: &usize, part: &'a str) -> (usize, String) { // переписать на while
         let diff = self.length - *current_len;
         match part.len().cmp(&diff) {
             Ordering::Less => (*current_len + part.len(), part.to_string()),
@@ -54,6 +54,15 @@ impl SplitStrategy for CountingSpliterator<'_> {
             first_iteration = first_iteration && part.len() == 0;
         }
         splited
+    }
+
+    fn compute_length(self: &Self, parts: Vec<&str>) -> usize {
+        let sum_length = parts.iter().map(|part| part.len()).sum::<usize>();
+        let mut count_split = sum_length / self.length - 1;
+        if sum_length % self.length != 0 {
+            count_split += 1;
+        }
+        sum_length + self.spliterator.len() * count_split
     }
 }
 

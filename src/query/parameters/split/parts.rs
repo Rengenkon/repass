@@ -29,6 +29,14 @@ impl SplitStrategy for BetweenPartsSpliterator<'_> {
         }
         splited
     }
+
+    fn compute_length(self: &Self, parts: Vec<&str>) -> usize {
+        if parts.is_empty() {
+            return 0;
+        }
+        let base_length = parts.iter().map(|part| part.len()).sum::<usize>();
+        base_length + self.spliterator.len() * (parts.len() - 1)
+    }
 }
 
 #[cfg(test)]
