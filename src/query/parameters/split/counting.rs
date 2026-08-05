@@ -19,35 +19,63 @@ impl<'a> CountingSpliterator<'a> {
             length: len,
         }
     }
+
+    fn len(self: &Self, current_len: &usize, part: &'a str) -> (usize, &'a str) {
+        let diff = self.length - *current_len;
+        match part.len().cmp(&diff) {
+            Ordering::Less => {
+                (*current_len + part.len(), part)
+            }
+            Ordering::Equal => {
+                (0, part)
+            }
+            Ordering::Greater => {
+                let (left, right) = part.split_at(diff);
+                let size = 0;
+                let (size, right) = self.len(&size, right);
+                let mut left = left.to_string();
+                left.push_str(self.spliterator);
+                left.push_str(right);
+                (size, left.as_str())
+            }
+        }
+    }
 }
 
 impl SplitStrategy for CountingSpliterator<'_> {
     fn add_spliterator(self: &Self, parts: Vec<&str>) -> String {
         let mut splited = String::new();
-        let mut iter = parts.iter();
+        let mut first_iteration = true;
         let mut current_len = 0;
 
 
         for part in parts {
-            let diff = self.length - current_len;
-            match part.len().cmp(&diff) {
-                Ordering::Less => {
-                    splited.push_str(part);
-                    current_len += part.len();
-                }
-                Ordering::Equal => {
-                    splited.push_str(part);
-                    splited.push_str(self.spliterator);
-                    current_len = 0;
-                }
-                Ordering::Greater => {
-                    let (left, right) = part.split_at(diff);
-                    splited.push_str(left);
-                    splited.push_str(self.spliterator);
-                    splited.push_str(right);
-                    current_len = right.len();
-                }
+            if current_len == 0 && !first_iteration {
+                splited.push_str(self.spliterator);
             }
+            splited.push_str(self.len(&mut current_len, part).as_str());
+
+            // let diff = self.length - current_len;
+            // match part.len().cmp(&diff) {
+            //     Ordering::Less => {
+            //         splited.push_str(part);
+            //         current_len += part.len();
+            //     }
+            //     Ordering::Equal => {
+            //         splited.push_str(part);
+            //         current_len = 0;
+            //     }
+            //     Ordering::Greater => {
+            //         let mut left;
+            //         let mut right;
+            //         (left, right) = part.split_at(diff);
+            //         splited.push_str(left);
+            //         splited.push_str(self.spliterator);
+            //         splited.push_str(right);
+            //         current_len = right.len();
+            //     }
+            // }
+            first_iteration = false;
         }
 
         splited
