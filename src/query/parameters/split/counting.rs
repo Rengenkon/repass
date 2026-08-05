@@ -28,6 +28,7 @@ impl SplitStrategy for FixIntervalSpliterator<'_> {
         let mut cmp_result = Ordering::Less;
         let mut value = "";
         let mut diff = self.length;
+
         loop {
             if cmp_result != Ordering::Greater {
                 let part = iter.next();
@@ -61,7 +62,11 @@ impl SplitStrategy for FixIntervalSpliterator<'_> {
 
     fn compute_length(self: &Self, parts: &[&str]) -> usize {
         let sum_length = parts.iter().map(|part| part.len()).sum::<usize>();
-        let mut count_split = sum_length / self.length - 1;
+        let mut count_split = sum_length / self.length;
+        if count_split == 0 {
+            return 0;
+        }
+        count_split -= 1;
         if sum_length % self.length != 0 {
             count_split += 1;
         }
@@ -71,8 +76,33 @@ impl SplitStrategy for FixIntervalSpliterator<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::for_tests::size_equals_test;
     use super::FixIntervalSpliterator;
     use super::SplitStrategy;
+
+    #[test]
+    fn size_test() {
+        let spliterators = vec![
+            FixIntervalSpliterator::new("-", 1),
+            FixIntervalSpliterator::new("-", 0),
+            FixIntervalSpliterator::new("", 1),
+            FixIntervalSpliterator::new("biba", 1),
+            FixIntervalSpliterator::new("aa", 3)
+        ];
+        let data = vec![
+            Vec::new(),
+            vec![""],
+            vec!["1"],
+            vec!["aboba"],
+            vec!["1", "2"],
+            vec!["abo", "ba"]
+        ];
+        for i in 0..spliterators.len() {
+            for j in 0..data.len() {
+                size_equals_test(&spliterators[i], &data[j]);
+            }
+        }
+    }
 
     #[test]
     fn dash_split() {
