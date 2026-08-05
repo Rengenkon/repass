@@ -20,10 +20,10 @@ impl SplitStrategy for BetweenPartsSpliterator<'_> {
         match part {
             None => {}
             Some(value) => {
-                splited += value;
+                splited.push_str(value);
                 while let Some(value) = iter.next() {
-                    splited += self.spliterator;
-                    splited += value;
+                    splited.push_str(self.spliterator);
+                    splited.push_str(value);
                 }
             }
         }
