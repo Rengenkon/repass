@@ -3,12 +3,12 @@ use core::str;
 use std::cmp::Ordering;
 
 #[derive(Debug)]
-pub struct CountingSpliterator<'a> {
+pub struct FixIntervalSpliterator<'a> {
     spliterator: &'a str,
     length: usize,
 }
 
-impl<'a> CountingSpliterator<'a> {
+impl<'a> FixIntervalSpliterator<'a> {
     pub fn new(spliterator: &'a str, length: usize) -> Self {
         let mut len = length;
         if length == 0 {
@@ -39,7 +39,7 @@ impl<'a> CountingSpliterator<'a> {
     }
 }
 
-impl SplitStrategy for CountingSpliterator<'_> {
+impl SplitStrategy for FixIntervalSpliterator<'_> {
     fn add_spliterator(self: &Self, parts: &[&str]) -> String {
         let mut splited = String::new();
         let mut first_iteration = true;
@@ -69,12 +69,12 @@ impl SplitStrategy for CountingSpliterator<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::CountingSpliterator;
+    use super::FixIntervalSpliterator;
     use super::SplitStrategy;
 
     #[test]
     fn dash_split() {
-        let spliterator = CountingSpliterator::new("-", 1);
+        let spliterator = FixIntervalSpliterator::new("-", 1);
 
         assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
         assert_eq!(spliterator.add_spliterator(&vec![""]), "");
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn zero_length_split() {
-        let spliterator = CountingSpliterator::new("-", 0);
+        let spliterator = FixIntervalSpliterator::new("-", 0);
 
         assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
         assert_eq!(spliterator.add_spliterator(&vec![""]), "");
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn empty_split() {
-        let spliterator = CountingSpliterator::new("", 1);
+        let spliterator = FixIntervalSpliterator::new("", 1);
 
         assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
         assert_eq!(spliterator.add_spliterator(&vec![""]), "");
@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn long_split() {
-        let spliterator = CountingSpliterator::new("biba", 1);
+        let spliterator = FixIntervalSpliterator::new("biba", 1);
 
         assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
         assert_eq!(spliterator.add_spliterator(&vec![""]), "");
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn long_and_length_split() {
-        let spliterator = CountingSpliterator::new("aa", 3);
+        let spliterator = FixIntervalSpliterator::new("aa", 3);
 
         assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
         assert_eq!(spliterator.add_spliterator(&vec![""]), "");
