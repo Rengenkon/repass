@@ -1,8 +1,18 @@
-pub mod parts;
 pub mod counting;
 pub mod number;
+pub mod parts;
 
 pub trait SplitStrategy {
-    fn add_spliterator(self: &Self, parts: &Vec<&str>) -> String;
-    fn compute_length(self: &Self, parts: &Vec<&str>) -> usize;
+    fn add_spliterator(self: &Self, parts: &[&str]) -> String;
+    fn compute_length(self: &Self, parts: &[&str]) -> usize;
+}
+
+mod for_tests {
+    use super::SplitStrategy;
+
+    pub fn size_equals_test(spliterator: &dyn SplitStrategy, str: &Vec<&str>) {
+        let real_length = spliterator.add_spliterator(str).len();
+        let computed_length = spliterator.compute_length(&str);
+        assert_eq!(computed_length, real_length);
+    }
 }
