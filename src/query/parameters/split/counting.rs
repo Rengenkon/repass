@@ -19,40 +19,42 @@ impl<'a> FixIntervalSpliterator<'a> {
             length: len,
         }
     }
-
-    fn len(self: &Self, current_len: &usize, part: &'a str) -> (usize, String) {
-        // переписать на while
-        let diff = self.length - *current_len;
-        match part.len().cmp(&diff) {
-            Ordering::Less => (*current_len + part.len(), part.to_string()),
-            Ordering::Equal => (0, part.to_string()),
-            Ordering::Greater => {
-                let (left, right) = part.split_at(diff);
-                let size = 0;
-                let (size, right) = self.len(&size, right);
-                let mut left = left.to_string();
-                left.push_str(self.spliterator);
-                left.push_str(&right);
-                (size, left)
-            }
-        }
-    }
 }
 
 impl SplitStrategy for FixIntervalSpliterator<'_> {
     fn add_spliterator(self: &Self, parts: &[&str]) -> String {
         let mut splited = String::new();
-        let mut first_iteration = true;
-        let mut current_len = 0;
-
-        for part in parts {
-            if current_len == 0 && !first_iteration {
+        let mut iter = parts.iter();
+        let mut cmp_result = Ordering::Less;
+        let mut value = "";
+        let mut diff = self.length;
+        loop {
+            if cmp_result != Ordering::Greater {
+                let part = iter.next();
+                if part.is_none() {
+                    break;
+                }
+                value = part.unwrap();
+                if !value.is_empty() && cmp_result == Ordering::Equal {
+                    splited.push_str(self.spliterator);
+                    diff = self.length;
+                }
+            } else {
                 splited.push_str(self.spliterator);
+                diff = self.length;
             }
-            let (s, string) = self.len(&current_len, part);
-            current_len = s;
-            splited.push_str(&string);
-            first_iteration = first_iteration && part.len() == 0;
+            cmp_result = value.len().cmp(&diff);
+            match cmp_result {
+                Ordering::Less | Ordering::Equal => {
+                    splited.push_str(value);
+                    diff -= value.len();
+                }
+                Ordering::Greater => {
+                    let (left, right) = value.split_at(diff);
+                    splited.push_str(left);
+                    value = right;
+                }
+            }
         }
         splited
     }
