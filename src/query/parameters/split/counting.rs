@@ -20,23 +20,19 @@ impl<'a> CountingSpliterator<'a> {
         }
     }
 
-    fn len(self: &Self, current_len: &usize, part: &'a str) -> (usize, &'a str) {
+    fn len(self: &Self, current_len: &usize, part: &'a str) -> (usize, String) {
         let diff = self.length - *current_len;
         match part.len().cmp(&diff) {
-            Ordering::Less => {
-                (*current_len + part.len(), part)
-            }
-            Ordering::Equal => {
-                (0, part)
-            }
+            Ordering::Less => (*current_len + part.len(), part.to_string()),
+            Ordering::Equal => (0, part.to_string()),
             Ordering::Greater => {
                 let (left, right) = part.split_at(diff);
                 let size = 0;
                 let (size, right) = self.len(&size, right);
                 let mut left = left.to_string();
                 left.push_str(self.spliterator);
-                left.push_str(right);
-                (size, left.as_str())
+                left.push_str(&right);
+                (size, left)
             }
         }
     }
@@ -48,36 +44,15 @@ impl SplitStrategy for CountingSpliterator<'_> {
         let mut first_iteration = true;
         let mut current_len = 0;
 
-
         for part in parts {
             if current_len == 0 && !first_iteration {
                 splited.push_str(self.spliterator);
             }
-            splited.push_str(self.len(&mut current_len, part).as_str());
-
-            // let diff = self.length - current_len;
-            // match part.len().cmp(&diff) {
-            //     Ordering::Less => {
-            //         splited.push_str(part);
-            //         current_len += part.len();
-            //     }
-            //     Ordering::Equal => {
-            //         splited.push_str(part);
-            //         current_len = 0;
-            //     }
-            //     Ordering::Greater => {
-            //         let mut left;
-            //         let mut right;
-            //         (left, right) = part.split_at(diff);
-            //         splited.push_str(left);
-            //         splited.push_str(self.spliterator);
-            //         splited.push_str(right);
-            //         current_len = right.len();
-            //     }
-            // }
-            first_iteration = false;
+            let (s, string) = self.len(&current_len, part);
+            current_len = s;
+            splited.push_str(&string);
+            first_iteration = first_iteration && part.len() == 0;
         }
-
         splited
     }
 }
@@ -89,19 +64,31 @@ mod tests {
 
     #[test]
     fn dash_split() {
-        let spliterator = CountingSpliterator::new("-");
+        let spliterator = CountingSpliterator::new("-", 1);
 
         assert_eq!(spliterator.add_spliterator(Vec::new()), "");
         assert_eq!(spliterator.add_spliterator(vec![""]), "");
         assert_eq!(spliterator.add_spliterator(vec!["1"]), "1");
-        assert_eq!(spliterator.add_spliterator(vec!["aboba"]), "aboba");
+        assert_eq!(spliterator.add_spliterator(vec!["aboba"]), "a-b-o-b-a");
         assert_eq!(spliterator.add_spliterator(vec!["1", "2"]), "1-2");
-        assert_eq!(spliterator.add_spliterator(vec!["abo", "ba"]), "abo-ba");
+        assert_eq!(spliterator.add_spliterator(vec!["abo", "ba"]), "a-b-o-b-a");
+    }
+
+    #[test]
+    fn zero_length_split() {
+        let spliterator = CountingSpliterator::new("-", 0);
+
+        assert_eq!(spliterator.add_spliterator(Vec::new()), "");
+        assert_eq!(spliterator.add_spliterator(vec![""]), "");
+        assert_eq!(spliterator.add_spliterator(vec!["1"]), "1");
+        assert_eq!(spliterator.add_spliterator(vec!["aboba"]), "a-b-o-b-a");
+        assert_eq!(spliterator.add_spliterator(vec!["1", "2"]), "1-2");
+        assert_eq!(spliterator.add_spliterator(vec!["abo", "ba"]), "a-b-o-b-a");
     }
 
     #[test]
     fn empty_split() {
-        let spliterator = CountingSpliterator::new("");
+        let spliterator = CountingSpliterator::new("", 1);
 
         assert_eq!(spliterator.add_spliterator(Vec::new()), "");
         assert_eq!(spliterator.add_spliterator(vec![""]), "");
@@ -113,13 +100,26 @@ mod tests {
 
     #[test]
     fn long_split() {
-        let spliterator = CountingSpliterator::new("biba");
+        let spliterator = CountingSpliterator::new("biba", 1);
 
         assert_eq!(spliterator.add_spliterator(Vec::new()), "");
         assert_eq!(spliterator.add_spliterator(vec![""]), "");
         assert_eq!(spliterator.add_spliterator(vec!["1"]), "1");
-        assert_eq!(spliterator.add_spliterator(vec!["aboba"]), "aboba");
+        assert_eq!(spliterator.add_spliterator(vec!["aboba"]), "abibabbibaobibabbibaa");
         assert_eq!(spliterator.add_spliterator(vec!["1", "2"]), "1biba2");
-        assert_eq!(spliterator.add_spliterator(vec!["abo", "ba"]), "abobibaba");
+        assert_eq!(spliterator.add_spliterator(vec!["abo", "ba"]), "abibabbibaobibabbibaa");
+    }
+
+    #[test]
+    fn long_and_length_split() {
+        let spliterator = CountingSpliterator::new("aa", 3);
+
+        assert_eq!(spliterator.add_spliterator(Vec::new()), "");
+        assert_eq!(spliterator.add_spliterator(vec![""]), "");
+        assert_eq!(spliterator.add_spliterator(vec!["1"]), "1");
+        assert_eq!(spliterator.add_spliterator(vec!["1", "2"]), "12");
+        assert_eq!(spliterator.add_spliterator(vec!["1", "2", "3"]), "123");
+        assert_eq!(spliterator.add_spliterator(vec!["1", "2", "3", "4"]), "123aa4");
+        assert_eq!(spliterator.add_spliterator(vec!["", "1234"]), "123aa4");
     }
 }
