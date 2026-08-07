@@ -20,13 +20,21 @@ impl SplitStrategy for WithoutSpliterator {
 }
 
 mod tests {
-    use std::vec;
-    use crate::query::parameters::split::no_split::WithoutSpliterator;
     use super::super::for_tests::*;
+    use crate::query::parameters::split::no_split::WithoutSpliterator;
+    use std::vec;
 
     #[test]
     fn length_test() {
         let spliterator = vec![WithoutSpliterator::new()];
         size_equal_string(&spliterator, &get_test_data());
+    }
+
+    #[test]
+    fn content_test() {
+        let spliterator = WithoutSpliterator::new();
+        let given = get_test_data();
+        let when = vec!["", "", "1", "biba", "", "12", "123", "1234", "bibaboba"];
+        equals_string(&spliterator, &given, &when);
     }
 }

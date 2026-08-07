@@ -44,6 +44,38 @@ mod for_tests {
         size_equal_str(&spliterators, &parts);
     }
 
+    pub fn equals_str<S>(spliterators: &S, parts: &Vec<Vec<&str>>, results: &Vec<&str>)
+    where
+        S: SplitStrategy + Debug,
+    {
+        let mut p_iter = parts.iter();
+        let mut r_iter = results.iter();
+        loop {
+            let p = p_iter.next();
+            let r = r_iter.next();
+            match (p, r) {
+                (Some(p), Some(r)) => {
+                    let value = spliterators.add_spliterator(p);
+                    assert_eq!(value.as_str(), *r);
+                }
+                (None, None) => {
+                    break;
+                }
+                _ => {
+                    panic!("Given data difference size")
+                }
+            }
+        }
+    }
+
+    pub fn equals_string<S>(spliterators: &S, parts: &Vec<Vec<String>>, results: &Vec<&str>)
+    where
+        S: SplitStrategy + Debug,
+    {
+        let parts = convert_vectors(&parts);
+        equals_str(spliterators, &parts, results);
+    }
+
     fn convert_vectors(parts: &[Vec<String>]) -> Vec<Vec<&str>> {
         parts
             .iter()
