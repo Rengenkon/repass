@@ -14,20 +14,7 @@ impl<'a> BetweenPartsSpliterator<'a> {
 
 impl SplitStrategy for BetweenPartsSpliterator<'_> {
     fn add_spliterator(self: &Self, parts: &[&str]) -> String {
-        let mut splited = String::new();
-        let mut iter = parts.iter();
-        let part = iter.next();
-        match part {
-            None => {}
-            Some(value) => {
-                splited.push_str(value);
-                while let Some(value) = iter.next() {
-                    splited.push_str(self.spliterator);
-                    splited.push_str(value);
-                }
-            }
-        }
-        splited
+        parts.join(self.spliterator)
     }
 
     fn compute_length(self: &Self, parts: &[&str]) -> usize {
