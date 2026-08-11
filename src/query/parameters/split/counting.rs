@@ -72,32 +72,25 @@ impl SplitStrategy for FixIntervalSpliterator<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::for_tests::size_equals_test;
+    use super::super::for_tests::*;
     use super::FixIntervalSpliterator;
     use super::SplitStrategy;
 
-    #[test]
-    fn size_test() {
-        let spliterators = vec![
+    fn get_spliterators<'a>() -> Vec<FixIntervalSpliterator<'a>> {
+        vec![
             FixIntervalSpliterator::new("-", 1),
             FixIntervalSpliterator::new("-", 0),
             FixIntervalSpliterator::new("", 1),
             FixIntervalSpliterator::new("biba", 1),
-            FixIntervalSpliterator::new("aa", 3)
-        ];
-        let data = vec![
-            Vec::new(),
-            vec![""],
-            vec!["1"],
-            vec!["aboba"],
-            vec!["1", "2"],
-            vec!["abo", "ba"]
-        ];
-        for i in 0..spliterators.len() {
-            for j in 0..data.len() {
-                size_equals_test(&spliterators[i], &data[j]);
-            }
-        }
+            FixIntervalSpliterator::new("aa", 3),
+        ]
+    }
+
+    #[test]
+    fn size_test() {
+        let spliterators = get_spliterators();
+        let data = get_test_data();
+        size_equal_string(&spliterators, &data);
     }
 
     #[test]
