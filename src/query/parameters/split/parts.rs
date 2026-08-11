@@ -21,7 +21,7 @@ impl SplitStrategy for BetweenPartsSpliterator<'_> {
         if parts.is_empty() {
             return 0;
         }
-        let base_length = parts.iter().map(|part| part.len()).sum::<usize>();
+        let base_length = Self::char_length_for_parts(parts);
         base_length + self.spliterator.len() * (parts.len() - 1)
     }
 }

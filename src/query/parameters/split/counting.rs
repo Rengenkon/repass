@@ -61,7 +61,7 @@ impl SplitStrategy for FixIntervalSpliterator<'_> {
     }
 
     fn compute_length(self: &Self, parts: &[&str]) -> usize {
-        let sum_length = parts.iter().map(|part| part.len()).sum::<usize>();
+        let sum_length = Self::char_length_for_parts(parts);
         let mut count_split = sum_length / self.length;
         if count_split > 0 && sum_length % self.length == 0 {
             count_split -= 1;

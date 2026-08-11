@@ -1,11 +1,15 @@
 pub mod counting;
+pub mod no_split;
 pub mod number;
 pub mod parts;
-pub mod no_split;
 
 pub trait SplitStrategy {
     fn add_spliterator(self: &Self, parts: &[&str]) -> String;
     fn compute_length(self: &Self, parts: &[&str]) -> usize;
+
+    fn char_length_for_parts(parts: &[&str]) -> usize {
+        parts.iter().map(|part| part.len()).sum::<usize>()
+    }
 }
 
 mod for_tests {

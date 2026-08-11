@@ -15,13 +15,13 @@ impl SplitStrategy for WithoutSpliterator {
     }
 
     fn compute_length(self: &Self, parts: &[&str]) -> usize {
-        parts.iter().map(|s| s.len()).sum()
+        Self::char_length_for_parts(parts)
     }
 }
 
 mod tests {
     use super::super::for_tests::*;
-    use crate::query::parameters::split::no_split::WithoutSpliterator;
+    use super::WithoutSpliterator;
     use std::vec;
 
     #[test]
