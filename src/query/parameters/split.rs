@@ -7,6 +7,7 @@ pub trait SplitStrategy {
     fn add_spliterator(self: &Self, parts: &[&str]) -> String;
     fn compute_length(self: &Self, parts: &[&str]) -> usize;
 
+    // summarize_length
     fn char_length_for_parts(parts: &[&str]) -> usize {
         parts.iter().map(|part| part.len()).sum::<usize>()
     }
