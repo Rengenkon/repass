@@ -70,16 +70,23 @@ impl<'a> FixCountSpliterator<'a> {
                 }
                 part = op.unwrap();
             } else {
+                if cmp_result != Ordering::Greater {
+                    let op = raw_parts.next();
+                    if op.is_some() {
+                        part = op.unwrap();
+                    } else {
+                        result.push_str(separator);
+                        while split_indexes.next().is_some() {
+                            result.push_str(separator);
+                        }
+                        break;
+                    }
+                }
                 let diff = split_index.unwrap() - current_write_index;
-                if cmp_result == Ordering::Less || cmp_result == Ordering::Equal {
-                    part = raw_parts.next().unwrap();
-                }
-                if cmp_result == Ordering::Greater || cmp_result == Ordering::Equal {
-                    result.push_str(separator);
-                    current_write_index += 1;
-                }
                 cmp_result = part.len().cmp(&diff);
                 let insert = if cmp_result == Ordering::Greater {
+                    result.push_str(separator);
+                    current_write_index += 1;
                     let (left, right) = part.split_at(diff);
                     part = right;
                     left
@@ -144,7 +151,94 @@ mod tests {
     use std::vec;
 
     #[test]
-    fn assemble_test() {}
+    fn assemble_test_empty() {
+        let mut result = String::new();
+        let indexes = vec![];
+        let separator = "";
+        let parts = vec![];
+        FixCountSpliterator::generic_assemble(
+            &mut result,
+            indexes.iter().copied(),
+            &separator,
+            parts.iter().copied()
+        );
+        assert_eq!(result, "")
+    }
+
+    #[test]
+    fn assemble_test_12() {
+        let mut result = String::new();
+        let indexes = vec![];
+        let separator = "";
+        let parts = vec!["1", "2"];
+        FixCountSpliterator::generic_assemble(
+            &mut result,
+            indexes.iter().copied(),
+            &separator,
+            parts.iter().copied()
+        );
+        assert_eq!(result, "12")
+    }
+
+    #[test]
+    fn assemble_test_1_2() {
+        let mut result = String::new();
+        let indexes = vec![1];
+        let separator = "_";
+        let parts = vec!["1", "2"];
+        FixCountSpliterator::generic_assemble(
+            &mut result,
+            indexes.iter().copied(),
+            &separator,
+            parts.iter().copied()
+        );
+        assert_eq!(result, "1_2")
+    }
+
+    #[test]
+    fn assemble_test___1_2() {
+        let mut result = String::new();
+        let indexes = vec![0, 1, 3];
+        let separator = "_";
+        let parts = vec!["1", "2"];
+        FixCountSpliterator::generic_assemble(
+            &mut result,
+            indexes.iter().copied(),
+            &separator,
+            parts.iter().copied()
+        );
+        assert_eq!(result, "__1_2")
+    }
+
+    #[test]
+    fn assemble_test_12_3() {
+        let mut result = String::new();
+        let indexes = vec![2];
+        let separator = "_";
+        let parts = vec!["1", "2", "3"];
+        FixCountSpliterator::generic_assemble(
+            &mut result,
+            indexes.iter().copied(),
+            &separator,
+            parts.iter().copied()
+        );
+        assert_eq!(result, "12_3")
+    }
+
+    #[test]
+    fn assemble_test_1_2_3_with_wrapping() {
+        let mut result = String::new();
+        let indexes = vec![0,1,2,4,6,8,9,10];
+        let separator = "_";
+        let parts = vec!["1", "2", "3"];
+        FixCountSpliterator::generic_assemble(
+            &mut result,
+            indexes.iter().copied(),
+            &separator,
+            parts.iter().copied()
+        );
+        assert_eq!(result, "___1_2_3___")
+    }
 
     fn get_spliterators<'a>() -> Vec<FixCountSpliterator<'a>> {
         vec![
