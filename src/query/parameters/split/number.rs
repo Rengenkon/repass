@@ -84,19 +84,18 @@ impl<'a> FixCountSpliterator<'a> {
                 }
                 let diff = split_index.unwrap() - current_write_index;
                 cmp_result = part.len().cmp(&diff);
-                let insert = if cmp_result == Ordering::Greater {
-                    result.push_str(separator);
-                    current_write_index += 1;
+                if cmp_result == Ordering::Greater {
                     let (left, right) = part.split_at(diff);
                     part = right;
-                    left
-                } else {
-                    part
-                };
-                result.push_str(insert);
-                current_write_index += insert.len();
-                if diff == 0 {
+                    result.push_str(left);
+                    current_write_index += left.len();
+                    result.push_str(separator);
+                    current_write_index += 1;
                     split_index = split_indexes.next();
+                    continue
+                } else {
+                    result.push_str(part);
+                    current_write_index += part.len();
                 }
             }
         }
@@ -238,6 +237,21 @@ mod tests {
             parts.iter().copied()
         );
         assert_eq!(result, "___1_2_3___")
+    }
+
+    #[test]
+    fn assemble_test_1_2_3_with_wrappig() {
+        let mut result = String::new();
+        let indexes = vec![0,2];
+        let separator = "_";
+        let parts = vec!["123"];
+        FixCountSpliterator::generic_assemble(
+            &mut result,
+            indexes.iter().copied(),
+            &separator,
+            parts.iter().copied()
+        );
+        assert_eq!(result, "_1_23")
     }
 
     fn get_spliterators<'a>() -> Vec<FixCountSpliterator<'a>> {
