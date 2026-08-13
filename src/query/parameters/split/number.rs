@@ -49,7 +49,6 @@ impl<'a> FixCountSpliterator<'a> {
     /// The `split_indexes` must satisfy:
     /// - All indexes are unique.
     /// - They are sorted in ascending order.
-    /// - The last index is strictly less than the sum of lengths of all `raw_parts`.
     fn generic_assemble<'b>(
         result: &mut String,
         mut split_indexes: impl Iterator<Item = usize>,
@@ -240,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn assemble_test_1_2_3_with_wrappig() {
+    fn assemble_test__1_23() {
         let mut result = String::new();
         let indexes = vec![0,2];
         let separator = "_";
@@ -252,6 +251,21 @@ mod tests {
             parts.iter().copied()
         );
         assert_eq!(result, "_1_23")
+    }
+
+    #[test]
+    fn assemble_test__1__2_3456_7__8__9() {
+        let mut result = String::new();
+        let indexes = vec![0,2,3,5,10,12,13,15,16];
+        let separator = "_";
+        let parts = vec!["", "12", "", "3", "45", "", "678", "", "9"];
+        FixCountSpliterator::generic_assemble(
+            &mut result,
+            indexes.iter().copied(),
+            &separator,
+            parts.iter().copied()
+        );
+        assert_eq!(result, "_1__2_3456_7__8__9")
     }
 
     fn get_spliterators<'a>() -> Vec<FixCountSpliterator<'a>> {
