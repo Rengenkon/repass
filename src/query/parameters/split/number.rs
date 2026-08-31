@@ -379,21 +379,27 @@ mod tests {
             #[test]
             fn nulls() {
                 let correct = Errors::UndistributedGreaterOrEqualsParts;
-                let sizes = FixCountSpliterator::middle_parts_sizes(0, 0, 0).err().unwrap();
+                let sizes = FixCountSpliterator::middle_parts_sizes(0, 0, 0)
+                    .err()
+                    .unwrap();
                 assert_eq!(sizes, correct);
             }
 
             #[test]
             fn empty() {
                 let correct = Errors::NoPaste;
-                let sizes = FixCountSpliterator::middle_parts_sizes(1, 0, 0).err().unwrap();
+                let sizes = FixCountSpliterator::middle_parts_sizes(1, 0, 0)
+                    .err()
+                    .unwrap();
                 assert_eq!(sizes, correct);
             }
 
             #[test]
             fn d_1_0_1() {
                 let correct = Errors::UndistributedGreaterOrEqualsParts;
-                let sizes = FixCountSpliterator::middle_parts_sizes(1, 0, 1).err().unwrap();
+                let sizes = FixCountSpliterator::middle_parts_sizes(1, 0, 1)
+                    .err()
+                    .unwrap();
                 assert_eq!(sizes, correct);
             }
 
@@ -407,7 +413,9 @@ mod tests {
             #[test]
             fn d_1_1_1() {
                 let correct = Errors::UndistributedGreaterOrEqualsParts;
-                let sizes = FixCountSpliterator::middle_parts_sizes(1, 1, 1).err().unwrap();
+                let sizes = FixCountSpliterator::middle_parts_sizes(1, 1, 1)
+                    .err()
+                    .unwrap();
                 assert_eq!(sizes, correct);
             }
 
@@ -611,40 +619,146 @@ mod tests {
     }
 
     mod public_functional {
+        use super::{FixCountSpliterator, SplitStrategy};
         use rstest::{fixture, rstest};
-        use super::{FixCountSpliterator, tests::*};
+
+        #[fixture]
+        fn without_separator<'a>() -> FixCountSpliterator<'a> {
+            FixCountSpliterator::new("", 10)
+        }
+
+        #[fixture]
+        fn without_count<'a>() -> FixCountSpliterator<'a> {
+            FixCountSpliterator::new("-", 0)
+        }
+
+        #[fixture]
+        fn one_dash<'a>() -> FixCountSpliterator<'a> {
+            FixCountSpliterator::new("-", 1)
+        }
+
+        #[fixture]
+        fn one_long<'a>() -> FixCountSpliterator<'a> {
+            FixCountSpliterator::new("biba", 1)
+        }
+
+        #[fixture]
+        fn multi_long<'a>() -> FixCountSpliterator<'a> {
+            FixCountSpliterator::new("aAa", 4)
+        }
 
         #[rstest]
-        fn test() {
-            
+        #[case(Vec::new(), "")]
+        #[case(vec![""], "")]
+        #[case(vec!["1",], "")]
+        #[case(vec!["biba",], "")]
+        #[case(vec!["", "",], "")]
+        #[case(vec!["1", "2",], "")]
+        #[case(vec!["1", "2", "3",], "")]
+        #[case(vec!["1", "2", "3", "4",], "")]
+        #[case(vec!["biba", "boba",], "")]
+        fn without_separator_test(
+            #[from(without_separator)] separator: FixCountSpliterator,
+            #[case] input: Vec<&str>,
+            #[case] output: &str,
+        ) {
+            let result = separator.add_spliterator(&input);
+            assert_eq!(result, output);
         }
 
-
-        fn get_spliterators<'a>() -> Vec<FixCountSpliterator<'a>> {
-            vec![
-                FixCountSpliterator::new("-", 1),
-                FixCountSpliterator::new("-", 0),
-                FixCountSpliterator::new("", 1),
-                FixCountSpliterator::new("biba", 1),
-                FixCountSpliterator::new("aa", 3),
-            ]
+        #[rstest]
+        #[case(Vec::new(), "")]
+        #[case(vec![""], "")]
+        #[case(vec!["1",], "")]
+        #[case(vec!["biba",], "")]
+        #[case(vec!["", "",], "")]
+        #[case(vec!["1", "2",], "")]
+        #[case(vec!["1", "2", "3",], "")]
+        #[case(vec!["1", "2", "3", "4",], "")]
+        #[case(vec!["biba", "boba",], "")]
+        fn without_count_test(
+            #[from(without_count)] separator: FixCountSpliterator,
+            #[case] input: Vec<&str>,
+            #[case] output: &str,
+        ) {
+            let result = separator.add_spliterator(&input);
+            assert_eq!(result, output);
         }
 
-        #[test]
-        fn length_test() {
-            let spliterators = get_spliterators();
-            let data = get_test_data();
-            size_equal_string(&spliterators, &get_test_data());
-            Vec::new()
+        #[rstest]
+        #[case(Vec::new(), "")]
+        #[case(vec![""], "")]
+        #[case(vec!["1",], "")]
+        #[case(vec!["biba",], "")]
+        #[case(vec!["", "",], "")]
+        #[case(vec!["1", "2",], "")]
+        #[case(vec!["1", "2", "3",], "")]
+        #[case(vec!["1", "2", "3", "4",], "")]
+        #[case(vec!["biba", "boba",], "")]
+        fn one_dash_test(
+            #[from(one_dash)] separator: FixCountSpliterator,
+            #[case] input: Vec<&str>,
+            #[case] output: &str,
+        ) {
+            let result = separator.add_spliterator(&input);
+            assert_eq!(result, output);
         }
 
-        #[test]
-        fn content_test() {
-            let sp = get_spliterators();
-            let spliterator = sp.get(0).unwrap();
-            let given = get_test_data();
-            let when = vec!["", "", "1", "biba", "", "12", "123", "1234", "bibaboba"];
-            equals_string(spliterator, &given, &when);
+        #[rstest]
+        #[case(Vec::new(), "")]
+        #[case(vec![""], "")]
+        #[case(vec!["1",], "")]
+        #[case(vec!["biba",], "")]
+        #[case(vec!["", "",], "")]
+        #[case(vec!["1", "2",], "")]
+        #[case(vec!["1", "2", "3",], "")]
+        #[case(vec!["1", "2", "3", "4",], "")]
+        #[case(vec!["biba", "boba",], "")]
+        fn one_long_test(
+            #[from(one_long)] separator: FixCountSpliterator,
+            #[case] input: Vec<&str>,
+            #[case] output: &str,
+        ) {
+            let result = separator.add_spliterator(&input);
+            assert_eq!(result, output);
+        }
+
+        #[rstest]
+        #[case(Vec::new(), "")]
+        #[case(vec![""], "")]
+        #[case(vec!["1",], "")]
+        #[case(vec!["biba",], "")]
+        #[case(vec!["", "",], "")]
+        #[case(vec!["1", "2",], "")]
+        #[case(vec!["1", "2", "3",], "")]
+        #[case(vec!["1", "2", "3", "4",], "")]
+        #[case(vec!["biba", "boba",], "")]
+        fn multi_long_test(
+            #[from(multi_long)] separator: FixCountSpliterator,
+            #[case] input: Vec<&str>,
+            #[case] output: &str,
+        ) {
+            let result = separator.add_spliterator(&input);
+            assert_eq!(result, output);
+        }
+
+        #[rstest]
+        #[case(Vec::new())]
+        #[case(vec![""])]
+        #[case(vec!["1",])]
+        #[case(vec!["biba",])]
+        #[case(vec!["", "",])]
+        #[case(vec!["1", "2",])]
+        #[case(vec!["1", "2", "3",])]
+        #[case(vec!["1", "2", "3", "4",])]
+        #[case(vec!["biba", "boba",])]
+        fn length_test(
+            #[values(one_dash(), one_long(), multi_long())] separator: FixCountSpliterator,
+            #[case] input: Vec<&str>,
+        ) {
+            let result_len = separator.add_spliterator(&input).len();
+            let compute_len = separator.compute_length(&input);
+            assert_eq!(result_len, compute_len);
         }
     }
 }
