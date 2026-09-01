@@ -1,4 +1,4 @@
-use super::SplitStrategy;
+use super::SeparateStrategy;
 use core::str;
 use std::cmp::Ordering;
 
@@ -21,7 +21,7 @@ impl<'a> FixIntervalSpliterator<'a> {
     }
 }
 
-impl SplitStrategy for FixIntervalSpliterator<'_> {
+impl SeparateStrategy for FixIntervalSpliterator<'_> {
     fn add_spliterator(self: &Self, parts: &[&str]) -> String {
         let mut splited = String::new();
         let mut iter = parts.iter();
@@ -77,7 +77,7 @@ impl SplitStrategy for FixIntervalSpliterator<'_> {
 mod tests {
     use super::super::for_tests::*;
     use super::FixIntervalSpliterator;
-    use super::SplitStrategy;
+    use super::SeparateStrategy;
 
     fn get_spliterators<'a>() -> Vec<FixIntervalSpliterator<'a>> {
         vec![

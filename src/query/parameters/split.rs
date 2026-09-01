@@ -18,7 +18,7 @@ trait SeparatorInternal {
         result
     }
 
-    fn add_spliterator(self: &Self, parts: &[&str]) -> Result<String, String>;
+    fn add_separator(self: &Self, parts: &[&str]) -> Result<String, String>;
     fn length_with_separators(self: &Self, parts: &[&str]) -> usize;
 
     fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError>;
@@ -43,10 +43,10 @@ trait SeparatorInternal {
 /// Determine public functions for working with 'Separators'
 ///
 /// 'Sequence' is 'parts or character of parts'
-pub trait SplitStrategy: SeparatorInternal {
+pub trait SeparateStrategy: SeparatorInternal {
     /// Separate sequence with setuped separate segment
     fn separate(self: &Self, parts: &[&str]) -> String {
-        self.panic_with_errors(parts, Self::add_spliterator)
+        self.panic_with_errors(parts, Self::add_separator)
     }
 
     /// Compute final length of sequence with separators
@@ -73,14 +73,14 @@ pub enum IllegalArgumentError {
 }
 
 mod for_tests {
-    use super::SplitStrategy;
+    use super::SeparateStrategy;
     use std::fmt::Debug;
 
     pub fn size_equals_test<S>(spliterator: &S, parts: &[&str])
     where
-        S: SplitStrategy + Debug,
+        S: SeparateStrategy + Debug,
     {
-        let real_length = spliterator.add_spliterator(parts).len();
+        let real_length = spliterator.add_separator(parts).len();
         let computed_length = spliterator.length_with_separators(&parts);
         assert_eq!(
             computed_length, real_length,
@@ -91,7 +91,7 @@ mod for_tests {
 
     pub fn size_equal_str<S>(spliterators: &[S], parts: &Vec<Vec<&str>>)
     where
-        S: SplitStrategy + Debug,
+        S: SeparateStrategy + Debug,
     {
         for i in 0..spliterators.len() {
             for j in 0..parts.len() {
@@ -102,7 +102,7 @@ mod for_tests {
 
     pub fn size_equal_string<S>(spliterators: &[S], parts: &Vec<Vec<String>>)
     where
-        S: SplitStrategy + Debug,
+        S: SeparateStrategy + Debug,
     {
         let parts = convert_vectors(&parts);
         size_equal_str(&spliterators, &parts);
@@ -110,7 +110,7 @@ mod for_tests {
 
     pub fn equals_str<S>(spliterators: &S, parts: &Vec<Vec<&str>>, results: &Vec<&str>)
     where
-        S: SplitStrategy + Debug,
+        S: SeparateStrategy + Debug,
     {
         let mut p_iter = parts.iter();
         let mut r_iter = results.iter();
@@ -119,7 +119,7 @@ mod for_tests {
             let r = r_iter.next();
             match (p, r) {
                 (Some(p), Some(r)) => {
-                    let value = spliterators.add_spliterator(p);
+                    let value = spliterators.add_separator(p);
                     assert_eq!(value.as_str(), *r);
                 }
                 (None, None) => {
@@ -134,7 +134,7 @@ mod for_tests {
 
     pub fn equals_string<S>(spliterators: &S, parts: &Vec<Vec<String>>, results: &Vec<&str>)
     where
-        S: SplitStrategy + Debug,
+        S: SeparateStrategy + Debug,
     {
         let parts = convert_vectors(&parts);
         equals_str(spliterators, &parts, results);

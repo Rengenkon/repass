@@ -1,4 +1,4 @@
-use super::SplitStrategy;
+use super::SeparateStrategy;
 
 #[derive(Debug)]
 pub struct WithoutSpliterator {}
@@ -9,7 +9,7 @@ impl WithoutSpliterator {
     }
 }
 
-impl SplitStrategy for WithoutSpliterator {
+impl SeparateStrategy for WithoutSpliterator {
     fn add_spliterator(self: &Self, parts: &[&str]) -> String {
         parts.concat()
     }

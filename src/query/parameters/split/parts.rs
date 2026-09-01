@@ -1,4 +1,4 @@
-use super::SplitStrategy;
+use super::SeparateStrategy;
 use core::str;
 
 #[derive(Debug)]
@@ -12,7 +12,7 @@ impl<'a> BetweenPartsSpliterator<'a> {
     }
 }
 
-impl SplitStrategy for BetweenPartsSpliterator<'_> {
+impl SeparateStrategy for BetweenPartsSpliterator<'_> {
     fn add_spliterator(self: &Self, parts: &[&str]) -> String {
         parts.join(self.spliterator)
     }
@@ -30,7 +30,7 @@ impl SplitStrategy for BetweenPartsSpliterator<'_> {
 mod tests {
     use super::super::for_tests::size_equals_test;
     use super::BetweenPartsSpliterator;
-    use super::SplitStrategy;
+    use super::SeparateStrategy;
 
     #[test]
     fn dash_split() {

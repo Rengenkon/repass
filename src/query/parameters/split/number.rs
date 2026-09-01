@@ -1,4 +1,4 @@
-use super::{IllegalArgumentError, SeparatorInternal, SplitStrategy};
+use super::{IllegalArgumentError, SeparatorInternal, SeparateStrategy};
 use enum_display::EnumDisplay;
 use std::cmp::{Ordering, max, min};
 
@@ -10,8 +10,8 @@ pub enum Align {
 
 struct MetaInf {
     input_length: usize,
-    count_splits: usize,
-    count_parts: usize,
+    separates_count: usize,
+    parts_count: usize,
     chars_in_part: usize,
     chars_out_part: usize,
 }
@@ -27,30 +27,30 @@ struct MetaInf {
 ///
 /// If 'L' equals 0 then program panic
 #[derive(Debug)]
-pub struct FixCountSpliterator<'a> {
-    spliterator: &'a str,
+pub struct FixCountSeparator<'a> {
+    separator: &'a str,
     count: usize,
 }
 
-impl<'a> FixCountSpliterator<'a> {
-    pub fn new(spliterator: &'a str, count: usize) -> Self {
-        Self { spliterator, count }
+impl<'a> FixCountSeparator<'a> {
+    pub fn new(separator: &'a str, count: usize) -> Self {
+        Self { separator, count }
     }
 
-    fn count_splits(self: &Self, length: usize) -> usize {
+    fn count_separates(self: &Self, length: usize) -> usize {
         max(0, min(length as isize - 1, self.count as isize)) as usize
     }
 
     fn get_meta_inf(self: &Self, parts: &[&str]) -> MetaInf {
         let input_length = Self::get_summary_length(parts);
-        let count_splits = self.count_splits(input_length);
-        let count_parts = count_splits + 1;
-        let in_part = input_length / count_parts;
-        let out_part = input_length % count_parts;
+        let separates_count = self.count_separates(input_length);
+        let parts_count = separates_count + 1;
+        let in_part = input_length / parts_count;
+        let out_part = input_length % parts_count;
         MetaInf {
             input_length,
-            count_splits,
-            count_parts,
+            separates_count,
+            parts_count,
             chars_in_part: in_part,
             chars_out_part: out_part,
         }
@@ -149,45 +149,45 @@ impl<'a> FixCountSpliterator<'a> {
     }
 
     fn separator_indexes(self: &Self, meta: MetaInf) -> Vec<usize> {
-        let parts_size = Self::parts_sizes(meta.input_length, meta.count_parts);
-        Self::part_sizes_to_separators_indexes(0, &parts_size[0..meta.count_splits])
+        let parts_size = Self::parts_sizes(meta.input_length, meta.parts_count);
+        Self::part_sizes_to_separators_indexes(0, &parts_size[0..meta.separates_count])
     }
 
     fn assemble_with_capacity(
-        split_indexes: &[usize],
-        spliterator: &str,
+        separate_indexes: &[usize],
+        separator: &str,
         raw_parts: &[&str],
         finish_size: usize,
     ) -> String {
-        let mut splited = String::with_capacity(finish_size);
-        FixCountSpliterator::generic_assemble(
-            &mut splited,
-            split_indexes.iter().copied(),
-            spliterator,
+        let mut separated = String::with_capacity(finish_size);
+        FixCountSeparator::generic_assemble(
+            &mut separated,
+            separate_indexes.iter().copied(),
+            separator,
             raw_parts.iter().copied(),
         );
-        splited
+        separated
     }
 
     /// Appends assembled parts to `result`, inserting `separator` at positions
-    /// defined by `split_indexes`.
+    /// defined by `separate_indexes`.
     ///
-    /// The `split_indexes` must satisfy:
+    /// The `separate_indexes` must satisfy:
     /// - All indexes are unique.
     /// - They are sorted in ascending order.
     fn generic_assemble<'b>(
         result: &mut String,
-        mut split_indexes: impl Iterator<Item = usize>,
+        mut separate_indexes: impl Iterator<Item = usize>,
         separator: &str,
         mut raw_parts: impl Iterator<Item = &'b str>,
     ) {
         let mut part = "";
-        let mut split_index = split_indexes.next();
+        let mut separate_index = separate_indexes.next();
         let mut cmp_result = Ordering::Less;
         let mut current_write_index = 0;
 
         loop {
-            if split_index.is_none() {
+            if separate_index.is_none() {
                 result.push_str(part);
                 let op = raw_parts.next();
                 if op.is_none() {
@@ -201,13 +201,13 @@ impl<'a> FixCountSpliterator<'a> {
                         part = op.unwrap();
                     } else {
                         result.push_str(separator);
-                        while split_indexes.next().is_some() {
+                        while separate_indexes.next().is_some() {
                             result.push_str(separator);
                         }
                         break;
                     }
                 }
-                let diff = split_index.unwrap() - current_write_index;
+                let diff = separate_index.unwrap() - current_write_index;
                 cmp_result = part.len().cmp(&diff);
                 if cmp_result == Ordering::Greater {
                     let (left, right) = part.split_at(diff);
@@ -216,7 +216,7 @@ impl<'a> FixCountSpliterator<'a> {
                     current_write_index += left.len();
                     result.push_str(separator);
                     current_write_index += 1;
-                    split_index = split_indexes.next();
+                    separate_index = separate_indexes.next();
                     continue;
                 } else {
                     result.push_str(part);
@@ -227,12 +227,12 @@ impl<'a> FixCountSpliterator<'a> {
     }
 }
 
-impl<'a> SeparatorInternal for FixCountSpliterator<'a> {
-    fn add_spliterator(self: &Self, parts: &[&str]) -> Result<String, String> {
+impl<'a> SeparatorInternal for FixCountSeparator<'a> {
+    fn add_separator(self: &Self, parts: &[&str]) -> Result<String, String> {
         let separator_indexes = self.separator_indexes(parts);
         Self::assemble_with_capacity(
             &separator_indexes,
-            &self.spliterator,
+            &self.separator,
             parts,
             self.length_with_separators(parts),
         )
@@ -240,22 +240,22 @@ impl<'a> SeparatorInternal for FixCountSpliterator<'a> {
 
     fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
         let summary = Self::get_summary_length(parts);
-        summary + self.count_splits(summary) * self.spliterator.len()
+        summary + self.count_separates(summary) * self.separator.len()
     }
 
     fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
         let mut errors = Vec::new();
-        if self.spliterator.is_empty() {}
+        if self.separator.is_empty() {}
         if self.count == 0 {}
         if parts.is_empty() {}
         let meta = self.get_meta_inf(parts);
         if meta.input_length == 0 {}
-        if meta.chars_out_part >= meta.count_parts {}
+        if meta.chars_out_part >= meta.parts_count {}
         errors
     }
 }
 
-impl<'a> SplitStrategy for FixCountSpliterator<'a> {}
+impl<'a> SeparateStrategy for FixCountSeparator<'a> {}
 
 #[cfg(test)]
 mod tests {
@@ -264,14 +264,14 @@ mod tests {
     pub use std::vec;
 
     mod parts_sizes {
-        pub use super::{Align, Errors, FixCountSpliterator};
+        pub use super::{Align, Errors, FixCountSeparator};
         mod validate {
-            use super::{Errors, FixCountSpliterator};
+            use super::{Errors, FixCountSeparator};
 
             #[test]
             fn nulls() {
                 let correct = Errors::UndistributedGreaterOrEqualsParts;
-                let sizes = FixCountSpliterator::validate_undistributed(0, 0)
+                let sizes = FixCountSeparator::validate_undistributed(0, 0)
                     .err()
                     .unwrap();
                 assert_eq!(sizes, correct);
@@ -280,14 +280,14 @@ mod tests {
             #[test]
             fn right() {
                 let correct = ();
-                let sizes = FixCountSpliterator::validate_undistributed(1, 0).unwrap();
+                let sizes = FixCountSeparator::validate_undistributed(1, 0).unwrap();
                 assert_eq!(sizes, correct);
             }
 
             #[test]
             fn ones() {
                 let correct = Errors::UndistributedGreaterOrEqualsParts;
-                let sizes = FixCountSpliterator::validate_undistributed(0, 1)
+                let sizes = FixCountSeparator::validate_undistributed(0, 1)
                     .err()
                     .unwrap();
                 assert_eq!(sizes, correct);
@@ -300,7 +300,7 @@ mod tests {
             #[test]
             fn nulls() {
                 let correct = Errors::UndistributedGreaterOrEqualsParts;
-                let sizes = FixCountSpliterator::half_parts_sizes(0, 0, 0, Align::Left)
+                let sizes = FixCountSeparator::half_parts_sizes(0, 0, 0, Align::Left)
                     .err()
                     .unwrap();
                 assert_eq!(sizes, correct);
@@ -309,7 +309,7 @@ mod tests {
             #[test]
             fn d_7_0_1() {
                 let correct = Errors::NoPaste;
-                let sizes = FixCountSpliterator::half_parts_sizes(7, 0, 1, Align::Left)
+                let sizes = FixCountSeparator::half_parts_sizes(7, 0, 1, Align::Left)
                     .err()
                     .unwrap();
                 assert_eq!(sizes, correct);
@@ -318,21 +318,21 @@ mod tests {
             #[test]
             fn d_7_0_2() {
                 let correct = vec![1];
-                let sizes = FixCountSpliterator::half_parts_sizes(7, 0, 2, Align::Left).unwrap();
+                let sizes = FixCountSeparator::half_parts_sizes(7, 0, 2, Align::Left).unwrap();
                 assert_eq!(sizes, correct);
             }
 
             #[test]
             fn d_7_0_6() {
                 let correct = vec![1, 1, 1];
-                let sizes = FixCountSpliterator::half_parts_sizes(7, 0, 6, Align::Left).unwrap();
+                let sizes = FixCountSeparator::half_parts_sizes(7, 0, 6, Align::Left).unwrap();
                 assert_eq!(sizes, correct);
             }
 
             #[test]
             fn d_7_0_8_err() {
                 let correct = Errors::UndistributedGreaterOrEqualsParts;
-                let sizes = FixCountSpliterator::half_parts_sizes(7, 0, 7, Align::Left)
+                let sizes = FixCountSeparator::half_parts_sizes(7, 0, 7, Align::Left)
                     .err()
                     .unwrap();
                 assert_eq!(sizes, correct);
@@ -341,25 +341,25 @@ mod tests {
             #[test]
             fn d_7_1_2_left() {
                 let correct = vec![2, 1, 1];
-                let sizes = FixCountSpliterator::half_parts_sizes(7, 1, 2, Align::Left).unwrap();
+                let sizes = FixCountSeparator::half_parts_sizes(7, 1, 2, Align::Left).unwrap();
                 assert_eq!(sizes, correct);
             }
 
             #[test]
             fn d_7_1_2_right() {
                 let correct = vec![1, 1, 2];
-                let sizes = FixCountSpliterator::half_parts_sizes(7, 1, 2, Align::Right).unwrap();
+                let sizes = FixCountSeparator::half_parts_sizes(7, 1, 2, Align::Right).unwrap();
                 assert_eq!(sizes, correct);
             }
         }
 
         mod middle {
-            use super::{Errors, FixCountSpliterator};
+            use super::{Errors, FixCountSeparator};
 
             #[test]
             fn nulls() {
                 let correct = Errors::UndistributedGreaterOrEqualsParts;
-                let sizes = FixCountSpliterator::middle_parts_sizes(0, 0, 0)
+                let sizes = FixCountSeparator::middle_parts_sizes(0, 0, 0)
                     .err()
                     .unwrap();
                 assert_eq!(sizes, correct);
@@ -368,7 +368,7 @@ mod tests {
             #[test]
             fn empty() {
                 let correct = Errors::NoPaste;
-                let sizes = FixCountSpliterator::middle_parts_sizes(1, 0, 0)
+                let sizes = FixCountSeparator::middle_parts_sizes(1, 0, 0)
                     .err()
                     .unwrap();
                 assert_eq!(sizes, correct);
@@ -377,7 +377,7 @@ mod tests {
             #[test]
             fn d_1_0_1() {
                 let correct = Errors::UndistributedGreaterOrEqualsParts;
-                let sizes = FixCountSpliterator::middle_parts_sizes(1, 0, 1)
+                let sizes = FixCountSeparator::middle_parts_sizes(1, 0, 1)
                     .err()
                     .unwrap();
                 assert_eq!(sizes, correct);
@@ -386,14 +386,14 @@ mod tests {
             #[test]
             fn d_1_1_0() {
                 let correct = vec![1];
-                let sizes = FixCountSpliterator::middle_parts_sizes(1, 1, 0).unwrap();
+                let sizes = FixCountSeparator::middle_parts_sizes(1, 1, 0).unwrap();
                 assert_eq!(sizes, correct);
             }
 
             #[test]
             fn d_1_1_1() {
                 let correct = Errors::UndistributedGreaterOrEqualsParts;
-                let sizes = FixCountSpliterator::middle_parts_sizes(1, 1, 1)
+                let sizes = FixCountSeparator::middle_parts_sizes(1, 1, 1)
                     .err()
                     .unwrap();
                 assert_eq!(sizes, correct);
@@ -402,34 +402,34 @@ mod tests {
             #[test]
             fn d_3_1_1() {
                 let correct = vec![2];
-                let sizes = FixCountSpliterator::middle_parts_sizes(3, 1, 1).unwrap();
+                let sizes = FixCountSeparator::middle_parts_sizes(3, 1, 1).unwrap();
                 assert_eq!(sizes, correct);
             }
 
             #[test]
             fn d_12_10_11() {
                 let correct = vec![1];
-                let sizes = FixCountSpliterator::middle_parts_sizes(12, 10, 11).unwrap();
+                let sizes = FixCountSeparator::middle_parts_sizes(12, 10, 11).unwrap();
                 assert_eq!(sizes, correct);
             }
 
             #[test]
             fn d_13_10_11() {
                 let correct = vec![11];
-                let sizes = FixCountSpliterator::middle_parts_sizes(13, 10, 11).unwrap();
+                let sizes = FixCountSeparator::middle_parts_sizes(13, 10, 11).unwrap();
                 assert_eq!(sizes, correct);
             }
         }
     }
 
     mod size_to_index {
-        use super::FixCountSpliterator;
+        use super::FixCountSeparator;
 
         #[test]
         fn nulls() {
             let given = vec![];
             let correct = vec![];
-            let sizes = FixCountSpliterator::part_sizes_to_separators_indexes(0, &given);
+            let sizes = FixCountSeparator::part_sizes_to_separators_indexes(0, &given);
             assert_eq!(sizes, correct);
         }
 
@@ -437,7 +437,7 @@ mod tests {
         fn zero() {
             let given = vec![0];
             let correct = vec![0];
-            let sizes = FixCountSpliterator::part_sizes_to_separators_indexes(0, &given);
+            let sizes = FixCountSeparator::part_sizes_to_separators_indexes(0, &given);
             assert_eq!(sizes, correct);
         }
 
@@ -445,7 +445,7 @@ mod tests {
         fn offset() {
             let given = vec![0];
             let correct = vec![10];
-            let sizes = FixCountSpliterator::part_sizes_to_separators_indexes(10, &given);
+            let sizes = FixCountSeparator::part_sizes_to_separators_indexes(10, &given);
             assert_eq!(sizes, correct);
         }
 
@@ -453,7 +453,7 @@ mod tests {
         fn base() {
             let given = vec![1, 1, 1];
             let correct = vec![1, 3, 5];
-            let sizes = FixCountSpliterator::part_sizes_to_separators_indexes(0, &given);
+            let sizes = FixCountSeparator::part_sizes_to_separators_indexes(0, &given);
             assert_eq!(sizes, correct);
         }
 
@@ -461,7 +461,7 @@ mod tests {
         fn base_dif() {
             let given = vec![1, 2, 3];
             let correct = vec![1, 4, 8];
-            let sizes = FixCountSpliterator::part_sizes_to_separators_indexes(0, &given);
+            let sizes = FixCountSeparator::part_sizes_to_separators_indexes(0, &given);
             assert_eq!(sizes, correct);
         }
 
@@ -469,13 +469,13 @@ mod tests {
         fn base_dif_off() {
             let given = vec![1, 2, 3];
             let correct = vec![11, 14, 18];
-            let sizes = FixCountSpliterator::part_sizes_to_separators_indexes(10, &given);
+            let sizes = FixCountSeparator::part_sizes_to_separators_indexes(10, &given);
             assert_eq!(sizes, correct);
         }
     }
 
     mod assembling {
-        use super::FixCountSpliterator;
+        use super::FixCountSeparator;
 
         #[test]
         fn assemble_test_empty() {
@@ -483,7 +483,7 @@ mod tests {
             let indexes = vec![];
             let separator = "";
             let parts = vec![];
-            FixCountSpliterator::generic_assemble(
+            FixCountSeparator::generic_assemble(
                 &mut result,
                 indexes.iter().copied(),
                 &separator,
@@ -498,7 +498,7 @@ mod tests {
             let indexes = vec![];
             let separator = "";
             let parts = vec!["1", "2"];
-            FixCountSpliterator::generic_assemble(
+            FixCountSeparator::generic_assemble(
                 &mut result,
                 indexes.iter().copied(),
                 &separator,
@@ -513,7 +513,7 @@ mod tests {
             let indexes = vec![1];
             let separator = "_";
             let parts = vec!["1", "2"];
-            FixCountSpliterator::generic_assemble(
+            FixCountSeparator::generic_assemble(
                 &mut result,
                 indexes.iter().copied(),
                 &separator,
@@ -528,7 +528,7 @@ mod tests {
             let indexes = vec![0, 1, 3];
             let separator = "_";
             let parts = vec!["1", "2"];
-            FixCountSpliterator::generic_assemble(
+            FixCountSeparator::generic_assemble(
                 &mut result,
                 indexes.iter().copied(),
                 &separator,
@@ -543,7 +543,7 @@ mod tests {
             let indexes = vec![2];
             let separator = "_";
             let parts = vec!["1", "2", "3"];
-            FixCountSpliterator::generic_assemble(
+            FixCountSeparator::generic_assemble(
                 &mut result,
                 indexes.iter().copied(),
                 &separator,
@@ -558,7 +558,7 @@ mod tests {
             let indexes = vec![0, 1, 2, 4, 6, 8, 9, 10];
             let separator = "_";
             let parts = vec!["1", "2", "3"];
-            FixCountSpliterator::generic_assemble(
+            FixCountSeparator::generic_assemble(
                 &mut result,
                 indexes.iter().copied(),
                 &separator,
@@ -573,7 +573,7 @@ mod tests {
             let indexes = vec![0, 2];
             let separator = "_";
             let parts = vec!["123"];
-            FixCountSpliterator::generic_assemble(
+            FixCountSeparator::generic_assemble(
                 &mut result,
                 indexes.iter().copied(),
                 &separator,
@@ -588,7 +588,7 @@ mod tests {
             let indexes = vec![0, 2, 3, 5, 10, 12, 13, 15, 16];
             let separator = "_";
             let parts = vec!["", "12", "", "3", "45", "", "678", "", "9"];
-            FixCountSpliterator::generic_assemble(
+            FixCountSeparator::generic_assemble(
                 &mut result,
                 indexes.iter().copied(),
                 &separator,
@@ -599,32 +599,32 @@ mod tests {
     }
 
     mod public_functional {
-        use super::{FixCountSpliterator, SplitStrategy};
+        use super::{FixCountSeparator, SeparateStrategy};
         use rstest::{fixture, rstest};
 
         #[fixture]
-        fn without_separator<'a>() -> FixCountSpliterator<'a> {
-            FixCountSpliterator::new("", 10)
+        fn without_separator<'a>() -> FixCountSeparator<'a> {
+            FixCountSeparator::new("", 10)
         }
 
         #[fixture]
-        fn without_count<'a>() -> FixCountSpliterator<'a> {
-            FixCountSpliterator::new("-", 0)
+        fn without_count<'a>() -> FixCountSeparator<'a> {
+            FixCountSeparator::new("-", 0)
         }
 
         #[fixture]
-        fn one_dash<'a>() -> FixCountSpliterator<'a> {
-            FixCountSpliterator::new("-", 1)
+        fn one_dash<'a>() -> FixCountSeparator<'a> {
+            FixCountSeparator::new("-", 1)
         }
 
         #[fixture]
-        fn one_long<'a>() -> FixCountSpliterator<'a> {
-            FixCountSpliterator::new("biba", 1)
+        fn one_long<'a>() -> FixCountSeparator<'a> {
+            FixCountSeparator::new("biba", 1)
         }
 
         #[fixture]
-        fn multi_long<'a>() -> FixCountSpliterator<'a> {
-            FixCountSpliterator::new("aAa", 4)
+        fn multi_long<'a>() -> FixCountSeparator<'a> {
+            FixCountSeparator::new("aAa", 4)
         }
 
         #[rstest]
@@ -638,11 +638,11 @@ mod tests {
         #[case(vec!["1", "2", "3", "4",], "")]
         #[case(vec!["biba", "boba",], "")]
         fn without_separator_test(
-            #[from(without_separator)] separator: FixCountSpliterator,
+            #[from(without_separator)] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
             #[case] output: &str,
         ) {
-            let result = separator.add_spliterator(&input);
+            let result = separator.add_separator(&input);
             assert_eq!(result, output);
         }
 
@@ -657,11 +657,11 @@ mod tests {
         #[case(vec!["1", "2", "3", "4",], "")]
         #[case(vec!["biba", "boba",], "")]
         fn without_count_test(
-            #[from(without_count)] separator: FixCountSpliterator,
+            #[from(without_count)] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
             #[case] output: &str,
         ) {
-            let result = separator.add_spliterator(&input);
+            let result = separator.add_separator(&input);
             assert_eq!(result, output);
         }
 
@@ -676,11 +676,11 @@ mod tests {
         #[case(vec!["1", "2", "3", "4",], "")]
         #[case(vec!["biba", "boba",], "")]
         fn one_dash_test(
-            #[from(one_dash)] separator: FixCountSpliterator,
+            #[from(one_dash)] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
             #[case] output: &str,
         ) {
-            let result = separator.add_spliterator(&input);
+            let result = separator.add_separator(&input);
             assert_eq!(result, output);
         }
 
@@ -695,11 +695,11 @@ mod tests {
         #[case(vec!["1", "2", "3", "4",], "")]
         #[case(vec!["biba", "boba",], "")]
         fn one_long_test(
-            #[from(one_long)] separator: FixCountSpliterator,
+            #[from(one_long)] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
             #[case] output: &str,
         ) {
-            let result = separator.add_spliterator(&input);
+            let result = separator.add_separator(&input);
             assert_eq!(result, output);
         }
 
@@ -714,11 +714,11 @@ mod tests {
         #[case(vec!["1", "2", "3", "4",], "")]
         #[case(vec!["biba", "boba",], "")]
         fn multi_long_test(
-            #[from(multi_long)] separator: FixCountSpliterator,
+            #[from(multi_long)] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
             #[case] output: &str,
         ) {
-            let result = separator.add_spliterator(&input);
+            let result = separator.add_separator(&input);
             assert_eq!(result, output);
         }
 
@@ -733,10 +733,10 @@ mod tests {
         #[case(vec!["1", "2", "3", "4",])]
         #[case(vec!["biba", "boba",])]
         fn length_test(
-            #[values(one_dash(), one_long(), multi_long())] separator: FixCountSpliterator,
+            #[values(one_dash(), one_long(), multi_long())] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
         ) {
-            let result_len = separator.add_spliterator(&input).len();
+            let result_len = separator.add_separator(&input).len();
             let compute_len = separator.length_with_separators(&input);
             assert_eq!(result_len, compute_len);
         }
