@@ -56,27 +56,31 @@ impl<'a> FixCountSeparator<'a> {
         }
     }
 
+    fn align_parts_size(capacity: usize, out_part: usize, in_part: usize, align: Align) -> Vec<usize> {
+        let mut sizes = Vec::with_capacity(capacity);
+        for part in 0..capacity {
+            if (align == Align::Left && part < out_part)
+                || (align == Align::Right && part >= capacity - out_part)
+            {
+                sizes.push(in_part + 1);
+            } else {
+                sizes.push(in_part);
+            }
+        }
+        sizes
+    }
+
     fn half_parts_sizes(meta: &MetaInf, align: Align) -> Vec<usize> {
         if meta.parts_count == 1 || meta.chars_out_part == 1 {
             return Vec::new();
         }
-        let half_undistributed_count = meta.chars_out_part / 2;
+        let half_chars_out_part = meta.chars_out_part / 2;
         let capacity = if meta.chars_in_part == 0 {
-            half_undistributed_count
+            half_chars_out_part
         } else {
             meta.parts_count / 2
         };
-        let mut sizes = Vec::with_capacity(capacity);
-        for part in 0..capacity {
-            if (align == Align::Left && part < half_undistributed_count)
-                || (align == Align::Right && part >= capacity - half_undistributed_count)
-            {
-                sizes.push(meta.chars_in_part + 1);
-            } else {
-                sizes.push(meta.chars_in_part);
-            }
-        }
-        sizes
+        Self::align_parts_size(capacity, half_chars_out_part, meta.chars_in_part, align)
     }
 
     fn middle_parts_sizes(meta: &MetaInf) -> Vec<usize> {
@@ -91,8 +95,14 @@ impl<'a> FixCountSeparator<'a> {
     }
 
     fn parts_sizes(meta: &MetaInf) -> Vec<usize> {
-        if meta.chars_out_part & 2 == 1 && meta.parts_count % 2 == 0 { // 3,4 7,8
-            Self::half_parts_sizes(&meta, Align::Left)
+        if meta.chars_out_part & 2 == 1 && meta.parts_count % 2 == 0 {
+            // 3,4 7,8
+            Self::align_parts_size(
+                meta.parts_count,
+                meta.chars_out_part,
+                meta.chars_in_part,
+                Align::Left,
+            )
         } else {
             // todo invert if user want it
             let left_align = Align::Left;
