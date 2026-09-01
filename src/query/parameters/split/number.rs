@@ -56,42 +56,33 @@ impl<'a> FixCountSeparator<'a> {
         }
     }
 
-    fn half_parts_sizes(
-        parts_count: usize,
-        part_size: usize,
-        undistributed_count: usize,
-        align: Align,
-    ) -> Vec<usize> {
-        if parts_count == 1 || undistributed_count == 1 {
+    fn half_parts_sizes(meta: &MetaInf, align: Align) -> Vec<usize> {
+        if meta.parts_count == 1 || meta.chars_out_part == 1 {
             return Vec::new();
         }
-        let half_undistributed_count = undistributed_count / 2;
-        let capacity = if part_size == 0 {
+        let half_undistributed_count = meta.chars_out_part / 2;
+        let capacity = if meta.chars_in_part == 0 {
             half_undistributed_count
         } else {
-            parts_count / 2
+            meta.parts_count / 2
         };
         let mut sizes = Vec::with_capacity(capacity);
         for part in 0..capacity {
             if (align == Align::Left && part < half_undistributed_count)
                 || (align == Align::Right && part >= capacity - half_undistributed_count)
             {
-                sizes.push(part_size + 1);
+                sizes.push(meta.chars_in_part + 1);
             } else {
-                sizes.push(part_size);
+                sizes.push(meta.chars_in_part);
             }
         }
         sizes
     }
 
-    fn middle_parts_sizes(
-        parts_count: usize,
-        part_size: usize,
-        undistributed_count: usize,
-    ) -> Vec<usize> {
-        let mut count = undistributed_count % 2;
-        if parts_count % 2 == 1 {
-            count += part_size;
+    fn middle_parts_sizes(meta: &MetaInf) -> Vec<usize> {
+        let mut count = meta.chars_out_part % 2;
+        if meta.parts_count % 2 == 1 {
+            count += meta.chars_in_part;
         }
         if count == 0 {
             return Vec::new();
@@ -99,36 +90,18 @@ impl<'a> FixCountSeparator<'a> {
         vec![count]
     }
 
-    fn parts_sizes(length: usize, parts_count: usize) -> Vec<usize> {
-        let undistributed_count_charts = length % parts_count;
-        let chars_in_part = length / parts_count;
-
-        if undistributed_count_charts & 2 == 1 && parts_count % 2 == 0 {
-            Self::half_parts_sizes(
-                parts_count,
-                chars_in_part,
-                undistributed_count_charts,
-                Align::Left,
-            )
+    fn parts_sizes(meta: &MetaInf) -> Vec<usize> {
+        if meta.chars_out_part & 2 == 1 && meta.parts_count % 2 == 0 { // 3,4 7,8
+            Self::half_parts_sizes(&meta, Align::Left)
         } else {
             // todo invert if user want it
             let left_align = Align::Left;
             let right_align = Align::Right;
 
             let lmr_sizes = [
-                Self::half_parts_sizes(
-                    parts_count,
-                    chars_in_part,
-                    undistributed_count_charts,
-                    left_align,
-                ),
-                Self::middle_parts_sizes(parts_count, chars_in_part, undistributed_count_charts),
-                Self::half_parts_sizes(
-                    parts_count,
-                    chars_in_part,
-                    undistributed_count_charts,
-                    right_align,
-                ),
+                Self::half_parts_sizes(meta, left_align),
+                Self::middle_parts_sizes(meta),
+                Self::half_parts_sizes(meta, right_align),
             ];
             let mut result = Vec::new();
             lmr_sizes
@@ -149,7 +122,7 @@ impl<'a> FixCountSeparator<'a> {
     }
 
     fn separator_indexes(self: &Self, meta: &MetaInf) -> Vec<usize> {
-        let parts_size = Self::parts_sizes(meta.input_length, meta.parts_count);
+        let parts_size = Self::parts_sizes(meta);
         Self::part_sizes_to_separators_indexes(0, &parts_size[0..meta.separates_count])
     }
 
