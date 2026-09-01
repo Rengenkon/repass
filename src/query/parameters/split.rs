@@ -19,7 +19,7 @@ trait SeparatorInternal {
     }
 
     fn add_spliterator(self: &Self, parts: &[&str]) -> Result<String, String>;
-    fn compute_length(self: &Self, parts: &[&str]) -> Result<usize, String>;
+    fn length_with_separators(self: &Self, parts: &[&str]) -> usize;
 
     fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError>;
 
@@ -51,7 +51,7 @@ pub trait SplitStrategy: SeparatorInternal {
 
     /// Compute final length of sequence with separators
     fn compute_final_length(self: &Self, parts: &[&str]) -> usize {
-        self.panic_with_errors(parts, Self::compute_length)
+        self.panic_with_errors(parts, Self::length_with_separators)
     }
 
     /// Check common errors in Separator or parts
@@ -81,7 +81,7 @@ mod for_tests {
         S: SplitStrategy + Debug,
     {
         let real_length = spliterator.add_spliterator(parts).len();
-        let computed_length = spliterator.compute_length(&parts);
+        let computed_length = spliterator.length_with_separators(&parts);
         assert_eq!(
             computed_length, real_length,
             "spliterator: {:?}, data: {:?}",
