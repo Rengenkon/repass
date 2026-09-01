@@ -1,4 +1,4 @@
-use super::{IllegalArgumentError, SeparatorInternal, SeparateStrategy};
+use super::{IllegalArgumentError, SeparateStrategy, SeparatorInternal};
 use enum_display::EnumDisplay;
 use std::cmp::{Ordering, max, min};
 
@@ -99,16 +99,6 @@ impl<'a> FixCountSeparator<'a> {
         vec![count]
     }
 
-    fn part_sizes_to_separators_indexes(offset: usize, sizes: &[usize]) -> Vec<usize> {
-        let mut result = Vec::with_capacity(sizes.len());
-        let mut value: isize = offset as isize - 1;
-        for size in sizes {
-            value += *size as isize + 1;
-            result.push(value as usize);
-        }
-        result
-    }
-
     fn parts_sizes(length: usize, parts_count: usize) -> Vec<usize> {
         let undistributed_count_charts = length % parts_count;
         let chars_in_part = length / parts_count;
@@ -148,25 +138,19 @@ impl<'a> FixCountSeparator<'a> {
         }
     }
 
-    fn separator_indexes(self: &Self, meta: MetaInf) -> Vec<usize> {
-        let parts_size = Self::parts_sizes(meta.input_length, meta.parts_count);
-        Self::part_sizes_to_separators_indexes(0, &parts_size[0..meta.separates_count])
+    fn part_sizes_to_separators_indexes(offset: usize, sizes: &[usize]) -> Vec<usize> {
+        let mut result = Vec::with_capacity(sizes.len());
+        let mut value: isize = offset as isize - 1;
+        for size in sizes {
+            value += *size as isize + 1;
+            result.push(value as usize);
+        }
+        result
     }
 
-    fn assemble_with_capacity(
-        separate_indexes: &[usize],
-        separator: &str,
-        raw_parts: &[&str],
-        finish_size: usize,
-    ) -> String {
-        let mut separated = String::with_capacity(finish_size);
-        FixCountSeparator::generic_assemble(
-            &mut separated,
-            separate_indexes.iter().copied(),
-            separator,
-            raw_parts.iter().copied(),
-        );
-        separated
+    fn separator_indexes(self: &Self, meta: &MetaInf) -> Vec<usize> {
+        let parts_size = Self::parts_sizes(meta.input_length, meta.parts_count);
+        Self::part_sizes_to_separators_indexes(0, &parts_size[0..meta.separates_count])
     }
 
     /// Appends assembled parts to `result`, inserting `separator` at positions
@@ -175,33 +159,34 @@ impl<'a> FixCountSeparator<'a> {
     /// The `separate_indexes` must satisfy:
     /// - All indexes are unique.
     /// - They are sorted in ascending order.
-    fn generic_assemble<'b>(
-        result: &mut String,
-        mut separate_indexes: impl Iterator<Item = usize>,
-        separator: &str,
-        mut raw_parts: impl Iterator<Item = &'b str>,
-    ) {
+    fn generic_assemble<'b>(self: &Self, separate_indexes: &[usize], raw_parts: &[&str]) -> String {
+        let capacity = self.length_with_separators(raw_parts);
+        let mut result = String::with_capacity(capacity);
+        let mut indexes_iter = separate_indexes.iter();
+        let mut parts_iter = raw_parts.iter();
+        let separator = self.separator;
+
         let mut part = "";
-        let mut separate_index = separate_indexes.next();
+        let mut separate_index = indexes_iter.next();
         let mut cmp_result = Ordering::Less;
         let mut current_write_index = 0;
 
         loop {
             if separate_index.is_none() {
                 result.push_str(part);
-                let op = raw_parts.next();
+                let op = parts_iter.next();
                 if op.is_none() {
                     break;
                 }
                 part = op.unwrap();
             } else {
                 if cmp_result != Ordering::Greater {
-                    let op = raw_parts.next();
+                    let op = parts_iter.next();
                     if op.is_some() {
                         part = op.unwrap();
                     } else {
                         result.push_str(separator);
-                        while separate_indexes.next().is_some() {
+                        while indexes_iter.next().is_some() {
                             result.push_str(separator);
                         }
                         break;
@@ -216,7 +201,7 @@ impl<'a> FixCountSeparator<'a> {
                     current_write_index += left.len();
                     result.push_str(separator);
                     current_write_index += 1;
-                    separate_index = separate_indexes.next();
+                    separate_index = indexes_iter.next();
                     continue;
                 } else {
                     result.push_str(part);
@@ -224,18 +209,15 @@ impl<'a> FixCountSeparator<'a> {
                 }
             }
         }
+        result
     }
 }
 
 impl<'a> SeparatorInternal for FixCountSeparator<'a> {
-    fn add_separator(self: &Self, parts: &[&str]) -> Result<String, String> {
-        let separator_indexes = self.separator_indexes(parts);
-        Self::assemble_with_capacity(
-            &separator_indexes,
-            &self.separator,
-            parts,
-            self.length_with_separators(parts),
-        )
+    fn add_separator(self: &Self, parts: &[&str]) -> String {
+        let meta = self.get_meta_inf(parts);
+        let separator_indexes = self.separator_indexes(&meta);
+        self.generic_assemble(&separator_indexes, parts)
     }
 
     fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
