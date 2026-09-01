@@ -1,40 +1,79 @@
-use super::SeparateStrategy;
+use super::{IllegalArgumentError, SeparatorStrategy, SeparatorInternal};
 
 #[derive(Debug)]
-pub struct WithoutSpliterator {}
+pub struct WithoutSeparator {}
 
-impl WithoutSpliterator {
+impl WithoutSeparator {
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl SeparateStrategy for WithoutSpliterator {
-    fn add_spliterator(self: &Self, parts: &[&str]) -> String {
+impl SeparatorInternal for WithoutSeparator {
+    fn add_separator(self: &Self, parts: &[&str]) -> String {
         parts.concat()
     }
 
-    fn compute_length(self: &Self, parts: &[&str]) -> usize {
-        Self::char_length_for_parts(parts)
+    fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
+        Self::get_summary_length(parts)
+    }
+
+    fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
+        let mut errors = Vec::new();
+        if parts.is_empty() {
+            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
+        }
+        if Self::get_summary_length(parts) == 0 {
+            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
+        }
+        errors
     }
 }
 
-mod tests {
-    use super::super::for_tests::*;
-    use super::WithoutSpliterator;
-    use std::vec;
+impl SeparatorStrategy for WithoutSeparator {}
 
-    #[test]
-    fn length_test() {
-        let spliterator = vec![WithoutSpliterator::new()];
-        size_equal_string(&spliterator, &get_test_data());
+mod tests {
+    use super::super::*;
+    use super::WithoutSeparator;
+    use std::vec;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case(vec!["1",])]
+    #[case(vec!["biba",])]
+    #[case(vec!["", "",])]
+    #[case(vec!["1", "2",])]
+    #[case(vec!["1", "2", "3",])]
+    #[case(vec!["1", "2", "3", "4",])]
+    #[case(vec!["biba", "boba",])]
+    fn length_test(
+        #[values(WithoutSeparator::new())] separator: WithoutSeparator,
+        #[case] input: Vec<&str>,
+    ) {
+        let result_len = separator.separate(&input).len();
+        let compute_len = separator.length_after_separate(&input);
+        assert_eq!(result_len, compute_len);
     }
 
-    #[test]
-    fn content_test() {
-        let spliterator = WithoutSpliterator::new();
-        let given = get_test_data();
-        let when = vec!["", "", "1", "biba", "", "12", "123", "1234", "bibaboba"];
-        equals_string(&spliterator, &given, &when);
+    #[rstest]
+    #[should_panic]
+    #[case(Vec::new(), "")]
+    #[should_panic]
+    #[case(vec![""], "")]
+    #[should_panic]
+    #[case(vec!["", "",], "")]
+    #[case(vec!["1",], "1")]
+    #[case(vec!["biba",], "biba")]
+    #[case(vec!["1", "2",], "12")]
+    #[case(vec!["1", "2", "3",], "123")]
+    #[case(vec!["1", "2", "3", "4",], "1234")]
+    #[case(vec!["biba", "boba",], "bibaboba")]
+    fn multi_long_test(
+        #[values(WithoutSeparator::new())] separator: WithoutSeparator,
+        #[case] input: Vec<&str>,
+        #[case] output: &str,
+    ) {
+        let result = separator.separate(&input);
+        assert_eq!(result, output);
     }
 }

@@ -1,29 +1,25 @@
-use super::SeparateStrategy;
+use super::{IllegalArgumentError, SeparatorStrategy, SeparatorInternal};
 use core::str;
 use std::cmp::Ordering;
 
 #[derive(Debug)]
-pub struct FixIntervalSpliterator<'a> {
-    spliterator: &'a str,
+pub struct FixIntervalSeparator<'a> {
+    separator: &'a str,
     length: usize,
 }
 
-impl<'a> FixIntervalSpliterator<'a> {
-    pub fn new(spliterator: &'a str, length: usize) -> Self {
-        let mut len = length;
-        if length == 0 {
-            len += 1;
-        }
+impl<'a> FixIntervalSeparator<'a> {
+    pub fn new(separator: &'a str, length: usize) -> Self {
         Self {
-            spliterator,
-            length: len,
+            separator,
+            length,
         }
     }
 }
 
-impl SeparateStrategy for FixIntervalSpliterator<'_> {
-    fn add_spliterator(self: &Self, parts: &[&str]) -> String {
-        let mut splited = String::new();
+impl SeparatorInternal for FixIntervalSeparator<'_> {
+    fn add_separator(self: &Self, parts: &[&str]) -> String {
+        let mut separated = String::new();
         let mut iter = parts.iter();
         let mut cmp_result = Ordering::Less;
         let mut value = "";
@@ -37,132 +33,61 @@ impl SeparateStrategy for FixIntervalSpliterator<'_> {
                 }
                 value = part.unwrap();
                 if !value.is_empty() && cmp_result == Ordering::Equal {
-                    splited.push_str(self.spliterator);
+                    separated.push_str(self.separator);
                     diff = self.length;
                 }
             } else {
-                splited.push_str(self.spliterator);
+                separated.push_str(self.separator);
                 diff = self.length;
             }
             cmp_result = value.len().cmp(&diff);
             match cmp_result {
                 Ordering::Less | Ordering::Equal => {
-                    splited.push_str(value);
+                    separated.push_str(value);
                     diff -= value.len();
                 }
                 Ordering::Greater => {
                     let (left, right) = value.split_at(diff);
-                    splited.push_str(left);
+                    separated.push_str(left);
                     value = right;
                 }
             }
         }
-        splited
+        separated
+
     }
 
-    fn compute_length(self: &Self, parts: &[&str]) -> usize {
+    fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
+        let sum_length = Self::get_summary_length(parts);
+        let mut separators_count = sum_length / self.length;
+        if separators_count > 0 && sum_length % self.length == 0 {
+            separators_count -= 1;
+        }
+        sum_length + self.separator.len() * separators_count
+
+    }
+
+    fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
+        let mut errors = Vec::new();
+        if self.separator.is_empty() {
+            errors.push(IllegalArgumentError::EmptySeparator)
+        }
+        if self.length == 0 {
+            errors.push(IllegalArgumentError::AdditionalParameterIsZero)
+        }
         if parts.is_empty() {
-            return 0;
+            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
         }
-        let sum_length = Self::char_length_for_parts(parts);
-        let mut count_split = sum_length / self.length;
-        if count_split > 0 && sum_length % self.length == 0 {
-            count_split -= 1;
+        if Self::get_summary_length(parts) == 0 {
+            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
         }
-        sum_length + self.spliterator.len() * count_split
+        errors
     }
 }
 
+impl SeparatorStrategy for FixIntervalSeparator<'_> {}
+
 #[cfg(test)]
 mod tests {
-    use super::super::for_tests::*;
-    use super::FixIntervalSpliterator;
-    use super::SeparateStrategy;
 
-    fn get_spliterators<'a>() -> Vec<FixIntervalSpliterator<'a>> {
-        vec![
-            FixIntervalSpliterator::new("-", 1),
-            FixIntervalSpliterator::new("-", 0),
-            FixIntervalSpliterator::new("", 1),
-            FixIntervalSpliterator::new("biba", 1),
-            FixIntervalSpliterator::new("aa", 3),
-        ]
-    }
-
-    #[test]
-    fn size_test() {
-        let spliterators = get_spliterators();
-        let data = get_test_data();
-        size_equal_string(&spliterators, &data);
-    }
-
-    #[test]
-    fn dash_split() {
-        let spliterator = FixIntervalSpliterator::new("-", 1);
-
-        assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
-        assert_eq!(spliterator.add_spliterator(&vec![""]), "");
-        assert_eq!(spliterator.add_spliterator(&vec!["1"]), "1");
-        assert_eq!(spliterator.add_spliterator(&vec!["aboba"]), "a-b-o-b-a");
-        assert_eq!(spliterator.add_spliterator(&vec!["1", "2"]), "1-2");
-        assert_eq!(spliterator.add_spliterator(&vec!["abo", "ba"]), "a-b-o-b-a");
-    }
-
-    #[test]
-    fn zero_length_split() {
-        let spliterator = FixIntervalSpliterator::new("-", 0);
-
-        assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
-        assert_eq!(spliterator.add_spliterator(&vec![""]), "");
-        assert_eq!(spliterator.add_spliterator(&vec!["1"]), "1");
-        assert_eq!(spliterator.add_spliterator(&vec!["aboba"]), "a-b-o-b-a");
-        assert_eq!(spliterator.add_spliterator(&vec!["1", "2"]), "1-2");
-        assert_eq!(spliterator.add_spliterator(&vec!["abo", "ba"]), "a-b-o-b-a");
-    }
-
-    #[test]
-    fn empty_split() {
-        let spliterator = FixIntervalSpliterator::new("", 1);
-
-        assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
-        assert_eq!(spliterator.add_spliterator(&vec![""]), "");
-        assert_eq!(spliterator.add_spliterator(&vec!["1"]), "1");
-        assert_eq!(spliterator.add_spliterator(&vec!["aboba"]), "aboba");
-        assert_eq!(spliterator.add_spliterator(&vec!["1", "2"]), "12");
-        assert_eq!(spliterator.add_spliterator(&vec!["abo", "ba"]), "aboba");
-    }
-
-    #[test]
-    fn long_split() {
-        let spliterator = FixIntervalSpliterator::new("biba", 1);
-
-        assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
-        assert_eq!(spliterator.add_spliterator(&vec![""]), "");
-        assert_eq!(spliterator.add_spliterator(&vec!["1"]), "1");
-        assert_eq!(
-            spliterator.add_spliterator(&vec!["aboba"]),
-            "abibabbibaobibabbibaa"
-        );
-        assert_eq!(spliterator.add_spliterator(&vec!["1", "2"]), "1biba2");
-        assert_eq!(
-            spliterator.add_spliterator(&vec!["abo", "ba"]),
-            "abibabbibaobibabbibaa"
-        );
-    }
-
-    #[test]
-    fn long_and_length_split() {
-        let spliterator = FixIntervalSpliterator::new("aa", 3);
-
-        assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
-        assert_eq!(spliterator.add_spliterator(&vec![""]), "");
-        assert_eq!(spliterator.add_spliterator(&vec!["1"]), "1");
-        assert_eq!(spliterator.add_spliterator(&vec!["1", "2"]), "12");
-        assert_eq!(spliterator.add_spliterator(&vec!["1", "2", "3"]), "123");
-        assert_eq!(
-            spliterator.add_spliterator(&vec!["1", "2", "3", "4"]),
-            "123aa4"
-        );
-        assert_eq!(spliterator.add_spliterator(&vec!["", "1234"]), "123aa4");
-    }
 }

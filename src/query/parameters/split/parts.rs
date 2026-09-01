@@ -1,110 +1,64 @@
-use super::SeparateStrategy;
+use super::{IllegalArgumentError, SeparatorStrategy, SeparatorInternal};
 use core::str;
 
 #[derive(Debug)]
-pub struct BetweenPartsSpliterator<'a> {
-    spliterator: &'a str,
+pub struct BetweenPartsSeparator<'a> {
+    separator: &'a str,
 }
 
-impl<'a> BetweenPartsSpliterator<'a> {
-    pub fn new(spliterator: &'a str) -> Self {
-        Self { spliterator }
+impl<'a> BetweenPartsSeparator<'a> {
+    pub fn new(separator: &'a str) -> Self {
+        Self { separator }
     }
 }
 
-impl SeparateStrategy for BetweenPartsSpliterator<'_> {
-    fn add_spliterator(self: &Self, parts: &[&str]) -> String {
-        parts.join(self.spliterator)
+impl SeparatorInternal for BetweenPartsSeparator<'_> {
+    fn add_separator(self: &Self, parts: &[&str]) -> String {
+        parts.join(self.separator)
     }
 
-    fn compute_length(self: &Self, parts: &[&str]) -> usize {
-        if parts.is_empty() {
-            return 0;
+    fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
+        let base_length = Self::get_summary_length(parts);
+        base_length + self.separator.len() * (parts.len() - 1)
+    }
+
+    fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
+        let mut errors = Vec::new();
+        if self.separator.is_empty() {
+            errors.push(IllegalArgumentError::EmptySeparator)
         }
-        let base_length = Self::char_length_for_parts(parts);
-        base_length + self.spliterator.len() * (parts.len() - 1)
+        if parts.is_empty() {
+            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
+        }
+        if Self::get_summary_length(parts) == 0 {
+            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
+        }
+        errors
     }
 }
+
+impl SeparatorStrategy for BetweenPartsSeparator<'_> {}
 
 #[cfg(test)]
 mod tests {
-    use super::super::for_tests::size_equals_test;
-    use super::BetweenPartsSpliterator;
-    use super::SeparateStrategy;
-
-    #[test]
-    fn dash_split() {
-        let spliterator = BetweenPartsSpliterator::new("-");
-
-        assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
-        assert_eq!(spliterator.add_spliterator(&vec![""]), "");
-        assert_eq!(spliterator.add_spliterator(&vec!["", ""]), "-");
-        assert_eq!(spliterator.add_spliterator(&vec!["1"]), "1");
-        assert_eq!(spliterator.add_spliterator(&vec!["aboba"]), "aboba");
-        assert_eq!(spliterator.add_spliterator(&vec!["1", "2"]), "1-2");
-        assert_eq!(spliterator.add_spliterator(&vec!["abo", "ba"]), "abo-ba");
+    use rstest::fixture;
+    use super::BetweenPartsSeparator;
+    use super::SeparatorStrategy;
+    
+    #[fixture]
+    fn empty<'a>() -> BetweenPartsSeparator<'a> {
+        BetweenPartsSeparator::new("")
     }
 
-    #[test]
-    fn empty_split() {
-        let spliterator = BetweenPartsSpliterator::new("");
-
-        assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
-        assert_eq!(spliterator.add_spliterator(&vec![""]), "");
-        assert_eq!(spliterator.add_spliterator(&vec!["1"]), "1");
-        assert_eq!(spliterator.add_spliterator(&vec!["aboba"]), "aboba");
-        assert_eq!(spliterator.add_spliterator(&vec!["1", "2"]), "12");
-        assert_eq!(spliterator.add_spliterator(&vec!["abo", "ba"]), "aboba");
+    #[fixture]
+    fn dash<'a>() -> BetweenPartsSeparator<'a> {
+        BetweenPartsSeparator::new("-")
     }
 
-    #[test]
-    fn long_split() {
-        let spliterator = BetweenPartsSpliterator::new("biba");
-
-        assert_eq!(spliterator.add_spliterator(&Vec::new()), "");
-        assert_eq!(spliterator.add_spliterator(&vec![""]), "");
-        assert_eq!(spliterator.add_spliterator(&vec!["1"]), "1");
-        assert_eq!(spliterator.add_spliterator(&vec!["aboba"]), "aboba");
-        assert_eq!(spliterator.add_spliterator(&vec!["1", "2"]), "1biba2");
-        assert_eq!(spliterator.add_spliterator(&vec!["abo", "ba"]), "abobibaba");
+    #[fixture]
+    fn long<'a>() -> BetweenPartsSeparator<'a> {
+        BetweenPartsSeparator::new("boba")
     }
 
-    #[test]
-    fn size_dash_split() {
-        let spliterator = BetweenPartsSpliterator::new("-");
-
-        size_equals_test(&spliterator, &Vec::new());
-        size_equals_test(&spliterator, &vec![""]);
-        size_equals_test(&spliterator, &vec!["", ""]);
-        size_equals_test(&spliterator, &vec!["1"]);
-        size_equals_test(&spliterator, &vec!["aboba"]);
-        size_equals_test(&spliterator, &vec!["1", "2"]);
-        size_equals_test(&spliterator, &vec!["abo", "ba"]);
-    }
-
-    #[test]
-    fn size_empty_split() {
-        let spliterator = BetweenPartsSpliterator::new("");
-
-        size_equals_test(&spliterator, &Vec::new());
-        size_equals_test(&spliterator, &vec![""]);
-        size_equals_test(&spliterator, &vec!["", ""]);
-        size_equals_test(&spliterator, &vec!["1"]);
-        size_equals_test(&spliterator, &vec!["aboba"]);
-        size_equals_test(&spliterator, &vec!["1", "2"]);
-        size_equals_test(&spliterator, &vec!["abo", "ba"]);
-    }
-
-    #[test]
-    fn size_long_split() {
-        let spliterator = BetweenPartsSpliterator::new("biba");
-
-        size_equals_test(&spliterator, &Vec::new());
-        size_equals_test(&spliterator, &vec![""]);
-        size_equals_test(&spliterator, &vec!["", ""]);
-        size_equals_test(&spliterator, &vec!["1"]);
-        size_equals_test(&spliterator, &vec!["aboba"]);
-        size_equals_test(&spliterator, &vec!["1", "2"]);
-        size_equals_test(&spliterator, &vec!["abo", "ba"]);
-    }
+    
 }

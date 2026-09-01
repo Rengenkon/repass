@@ -11,10 +11,12 @@ trait SeparatorInternal {
     }
 
     fn format_error_msg(errors: &Vec<IllegalArgumentError>) -> String {
-        let mut result = String::new();
+        let mut result = String::from("Detected this errors for current Separator and parts:");
         for error in errors {
-            todo!()
+            result.push_str("\n\t-");
+            result.push_str(&error.to_string());
         }
+        result.push_str("\n\n");
         result
     }
 
@@ -29,11 +31,7 @@ trait SeparatorInternal {
     {
         let errors = self.chack_errors(parts);
         if errors.is_empty() {
-            let result = f(self, parts);
-            if result.is_ok() {
-                return result.ok().unwrap();
-            }
-            panic!("{}", result.err().unwrap())
+            return f(self, parts)
         }
         let errors_msg = Self::format_error_msg(&errors);
         panic!("{}", errors_msg)
@@ -43,14 +41,14 @@ trait SeparatorInternal {
 /// Determine public functions for working with 'Separators'
 ///
 /// 'Sequence' is 'parts or character of parts'
-pub trait SeparateStrategy: SeparatorInternal {
+pub trait SeparatorStrategy: SeparatorInternal {
     /// Separate sequence with setuped separate segment
     fn separate(self: &Self, parts: &[&str]) -> String {
         self.panic_with_errors(parts, Self::add_separator)
     }
 
     /// Compute final length of sequence with separators
-    fn compute_final_length(self: &Self, parts: &[&str]) -> usize {
+    fn length_after_separate(self: &Self, parts: &[&str]) -> usize {
         self.panic_with_errors(parts, Self::length_with_separators)
     }
 
@@ -65,7 +63,7 @@ pub enum IllegalArgumentError {
     #[display("")]
     EmptySeparator,
     #[display("")]
-    CountOfSeparatorsIsZero,
+    AdditionalParameterIsZero,
     #[display("")]
     SummaryLengthOfPartsIsZero,
     #[display("")]
