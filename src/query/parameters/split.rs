@@ -18,14 +18,14 @@ trait SeparatorInternal {
         result
     }
 
-    fn add_separator(self: &Self, parts: &[&str]) -> Result<String, String>;
+    fn add_separator(self: &Self, parts: &[&str]) -> String;
     fn length_with_separators(self: &Self, parts: &[&str]) -> usize;
 
     fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError>;
 
     fn panic_with_errors<T, F>(self: &Self, parts: &[&str], f: F) -> T
     where
-        F: Fn(&Self, &[&str]) -> Result<T, String>,
+        F: Fn(&Self, &[&str]) -> T,
     {
         let errors = self.chack_errors(parts);
         if errors.is_empty() {

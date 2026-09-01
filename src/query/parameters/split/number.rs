@@ -1,5 +1,4 @@
 use super::{IllegalArgumentError, SeparateStrategy, SeparatorInternal};
-use enum_display::EnumDisplay;
 use std::cmp::{Ordering, max, min};
 
 #[derive(Debug, PartialEq)]
@@ -56,7 +55,12 @@ impl<'a> FixCountSeparator<'a> {
         }
     }
 
-    fn align_parts_size(capacity: usize, out_part: usize, in_part: usize, align: Align) -> Vec<usize> {
+    fn align_parts_size(
+        capacity: usize,
+        out_part: usize,
+        in_part: usize,
+        align: Align,
+    ) -> Vec<usize> {
         let mut sizes = Vec::with_capacity(capacity);
         for part in 0..capacity {
             if (align == Align::Left && part < out_part)
@@ -136,12 +140,6 @@ impl<'a> FixCountSeparator<'a> {
         Self::part_sizes_to_separators_indexes(0, &parts_size[0..meta.separates_count])
     }
 
-    /// Appends assembled parts to `result`, inserting `separator` at positions
-    /// defined by `separate_indexes`.
-    ///
-    /// The `separate_indexes` must satisfy:
-    /// - All indexes are unique.
-    /// - They are sorted in ascending order.
     fn generic_assemble<'b>(self: &Self, separate_indexes: &[usize], raw_parts: &[&str]) -> String {
         let capacity = self.length_with_separators(raw_parts);
         let mut result = String::with_capacity(capacity);
@@ -210,12 +208,18 @@ impl<'a> SeparatorInternal for FixCountSeparator<'a> {
 
     fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
         let mut errors = Vec::new();
-        if self.separator.is_empty() {}
-        if self.count == 0 {}
-        if parts.is_empty() {}
-        let meta = self.get_meta_inf(parts);
-        if meta.input_length == 0 {}
-        if meta.chars_out_part >= meta.parts_count {}
+        if self.separator.is_empty() {
+            errors.push(IllegalArgumentError::EmptySeparator)
+        }
+        if self.count == 0 {
+            errors.push(IllegalArgumentError::CountOfSeparatorsIsZero)
+        }
+        if parts.is_empty() {
+            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
+        }
+        if Self::get_summary_length(parts) == 0 {
+            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
+        }
         errors
     }
 }
