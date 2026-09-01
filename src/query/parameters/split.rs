@@ -59,6 +59,7 @@ pub trait SplitStrategy: SeparatorInternal {
         self.chack_errors(parts)
     }
 }
+
 #[derive(Debug, EnumDisplay)]
 pub enum IllegalArgumentError {
     #[display("")]

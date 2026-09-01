@@ -1,6 +1,22 @@
-use super::SplitStrategy;
+use super::{IllegalArgumentError, SeparatorInternal, SplitStrategy};
 use enum_display::EnumDisplay;
 use std::cmp::{Ordering, max, min};
+
+#[derive(Debug, PartialEq)]
+pub enum Align {
+    Left,
+    Right,
+}
+
+#[derive(Debug, PartialEq, EnumDisplay)]
+pub enum Errors {
+    #[display("")]
+    NoPaste,
+    #[display("")]
+    UndistributedGreaterOrEqualsParts,
+    #[display("")]
+    AllPartsIsIllegal(Vec<Errors>),
+}
 
 /// Separate parts with setuped count of separate segments
 /// Length of parts doesn't matter
@@ -112,7 +128,7 @@ impl<'a> FixCountSpliterator<'a> {
     }
 
     fn separator_indexes(self: &Self, parts: &[&str]) -> Result<Vec<usize>, Errors> {
-        let length = Self::char_length_for_parts(parts);
+        let length = Self::get_summary_length(parts);
         let count_splits = self.count_splits(length);
         let parts_size = Self::parts_sizes(length, count_splits + 1)?;
         Ok(Self::part_sizes_to_separators_indexes(
@@ -234,24 +250,8 @@ impl<'a> FixCountSpliterator<'a> {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum Align {
-    Left,
-    Right,
-}
-
-#[derive(Debug, PartialEq, EnumDisplay)]
-pub enum Errors {
-    #[display("")]
-    NoPaste,
-    #[display("")]
-    UndistributedGreaterOrEqualsParts,
-    #[display("")]
-    AllPartsIsIllegal(Vec<Errors>),
-}
-
-impl<'a> SplitStrategy for FixCountSpliterator<'a> {
-    fn add_spliterator(self: &Self, parts: &[&str]) -> String {
+impl<'a> SeparatorInternal for FixCountSpliterator<'a> {
+    fn add_spliterator(self: &Self, parts: &[&str]) -> Result<String, String> {
         let separator_indexes = self.separator_indexes(parts);
         match separator_indexes {
             Ok(separator_indexes) => Self::assemble_with_capacity(
@@ -268,14 +268,23 @@ impl<'a> SplitStrategy for FixCountSpliterator<'a> {
         }
     }
 
-    fn compute_length(self: &Self, parts: &[&str]) -> usize {
+    fn compute_length(self: &Self, parts: &[&str]) -> Result<usize, String> {
         if parts.is_empty() {
             return 0;
         }
         let length = Self::char_length_for_parts(parts);
         length + self.count_splits(length) * self.spliterator.len()
     }
+
+    fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
+        if undistributed_count >= parts_count {
+            return Err(Errors::UndistributedGreaterOrEqualsParts);
+        }
+        todo!()
+    }
 }
+
+impl<'a> SplitStrategy for FixCountSpliterator<'a> {}
 
 #[cfg(test)]
 mod tests {
