@@ -1,4 +1,4 @@
-pub mod split;
+pub mod separate;
 
 pub enum Strategy {
     Character,

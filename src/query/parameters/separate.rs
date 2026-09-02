@@ -1,9 +1,9 @@
 use enum_display::EnumDisplay;
 
-pub mod counting;
+pub mod interval;
 pub mod no_split;
-pub mod number;
-pub mod parts;
+pub mod fix_count;
+pub mod on_parts;
 
 trait SeparatorInternal {
     fn get_summary_length(parts: &[&str]) -> usize {
