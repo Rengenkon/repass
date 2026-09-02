@@ -1,4 +1,4 @@
-use super::{IllegalArgumentError, SeparatorStrategy, SeparatorInternal};
+use super::{IllegalArgumentError, SeparatorInternal, SeparatorStrategy};
 use std::cmp::{Ordering, max, min};
 
 #[derive(Debug, PartialEq)]
@@ -228,347 +228,9 @@ impl SeparatorStrategy for FixCountSeparator<'_> {}
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::*;
-    pub use super::*;
-    pub use std::vec;
-
-    // mod parts_sizes {
-    //     pub use super::{Align, FixCountSeparator};
-    //     mod validate {
-    //         use super::{FixCountSeparator};
-    //
-    //         #[test]
-    //         fn nulls() {
-    //             let correct = Errors::UndistributedGreaterOrEqualsParts;
-    //             let sizes = FixCountSeparator::validate_undistributed(0, 0)
-    //                 .err()
-    //                 .unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn right() {
-    //             let correct = ();
-    //             let sizes = FixCountSeparator::validate_undistributed(1, 0).unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn ones() {
-    //             let correct = Errors::UndistributedGreaterOrEqualsParts;
-    //             let sizes = FixCountSeparator::validate_undistributed(0, 1)
-    //                 .err()
-    //                 .unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //     }
-    //
-    //     mod half {
-    //         use super::*;
-    //
-    //         #[test]
-    //         fn nulls() {
-    //             let correct = Errors::UndistributedGreaterOrEqualsParts;
-    //             let sizes = FixCountSeparator::half_parts_sizes(0, 0, 0, Align::Left)
-    //                 .err()
-    //                 .unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_7_0_1() {
-    //             let correct = Errors::NoPaste;
-    //             let sizes = FixCountSeparator::half_parts_sizes(7, 0, 1, Align::Left)
-    //                 .err()
-    //                 .unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_7_0_2() {
-    //             let correct = vec![1];
-    //             let sizes = FixCountSeparator::half_parts_sizes(7, 0, 2, Align::Left).unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_7_0_6() {
-    //             let correct = vec![1, 1, 1];
-    //             let sizes = FixCountSeparator::half_parts_sizes(7, 0, 6, Align::Left).unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_7_0_8_err() {
-    //             let correct = Errors::UndistributedGreaterOrEqualsParts;
-    //             let sizes = FixCountSeparator::half_parts_sizes(7, 0, 7, Align::Left)
-    //                 .err()
-    //                 .unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_7_1_2_left() {
-    //             let correct = vec![2, 1, 1];
-    //             let sizes = FixCountSeparator::half_parts_sizes(7, 1, 2, Align::Left).unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_7_1_2_right() {
-    //             let correct = vec![1, 1, 2];
-    //             let sizes = FixCountSeparator::half_parts_sizes(7, 1, 2, Align::Right).unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //     }
-    //
-    //     mod middle {
-    //         use super::{Errors, FixCountSeparator};
-    //
-    //         #[test]
-    //         fn nulls() {
-    //             let correct = Errors::UndistributedGreaterOrEqualsParts;
-    //             let sizes = FixCountSeparator::middle_parts_sizes(0, 0, 0)
-    //                 .err()
-    //                 .unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn empty() {
-    //             let correct = Errors::NoPaste;
-    //             let sizes = FixCountSeparator::middle_parts_sizes(1, 0, 0)
-    //                 .err()
-    //                 .unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_1_0_1() {
-    //             let correct = Errors::UndistributedGreaterOrEqualsParts;
-    //             let sizes = FixCountSeparator::middle_parts_sizes(1, 0, 1)
-    //                 .err()
-    //                 .unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_1_1_0() {
-    //             let correct = vec![1];
-    //             let sizes = FixCountSeparator::middle_parts_sizes(1, 1, 0).unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_1_1_1() {
-    //             let correct = Errors::UndistributedGreaterOrEqualsParts;
-    //             let sizes = FixCountSeparator::middle_parts_sizes(1, 1, 1)
-    //                 .err()
-    //                 .unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_3_1_1() {
-    //             let correct = vec![2];
-    //             let sizes = FixCountSeparator::middle_parts_sizes(3, 1, 1).unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_12_10_11() {
-    //             let correct = vec![1];
-    //             let sizes = FixCountSeparator::middle_parts_sizes(12, 10, 11).unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //
-    //         #[test]
-    //         fn d_13_10_11() {
-    //             let correct = vec![11];
-    //             let sizes = FixCountSeparator::middle_parts_sizes(13, 10, 11).unwrap();
-    //             assert_eq!(sizes, correct);
-    //         }
-    //     }
-    // }
-    //
-    // mod size_to_index {
-    //     use super::FixCountSeparator;
-    //
-    //     #[test]
-    //     fn nulls() {
-    //         let given = vec![];
-    //         let correct = vec![];
-    //         let sizes = FixCountSeparator::part_sizes_to_separators_indexes(0, &given);
-    //         assert_eq!(sizes, correct);
-    //     }
-    //
-    //     #[test]
-    //     fn zero() {
-    //         let given = vec![0];
-    //         let correct = vec![0];
-    //         let sizes = FixCountSeparator::part_sizes_to_separators_indexes(0, &given);
-    //         assert_eq!(sizes, correct);
-    //     }
-    //
-    //     #[test]
-    //     fn offset() {
-    //         let given = vec![0];
-    //         let correct = vec![10];
-    //         let sizes = FixCountSeparator::part_sizes_to_separators_indexes(10, &given);
-    //         assert_eq!(sizes, correct);
-    //     }
-    //
-    //     #[test]
-    //     fn base() {
-    //         let given = vec![1, 1, 1];
-    //         let correct = vec![1, 3, 5];
-    //         let sizes = FixCountSeparator::part_sizes_to_separators_indexes(0, &given);
-    //         assert_eq!(sizes, correct);
-    //     }
-    //
-    //     #[test]
-    //     fn base_dif() {
-    //         let given = vec![1, 2, 3];
-    //         let correct = vec![1, 4, 8];
-    //         let sizes = FixCountSeparator::part_sizes_to_separators_indexes(0, &given);
-    //         assert_eq!(sizes, correct);
-    //     }
-    //
-    //     #[test]
-    //     fn base_dif_off() {
-    //         let given = vec![1, 2, 3];
-    //         let correct = vec![11, 14, 18];
-    //         let sizes = FixCountSeparator::part_sizes_to_separators_indexes(10, &given);
-    //         assert_eq!(sizes, correct);
-    //     }
-    // }
-    //
-    // mod assembling {
-    //     use super::FixCountSeparator;
-    //
-    //     #[test]
-    //     fn assemble_test_empty() {
-    //         let mut result = String::new();
-    //         let indexes = vec![];
-    //         let separator = "";
-    //         let parts = vec![];
-    //         FixCountSeparator::generic_assemble(
-    //             &mut result,
-    //             indexes.iter().copied(),
-    //             &separator,
-    //             parts.iter().copied(),
-    //         );
-    //         assert_eq!(result, "")
-    //     }
-    //
-    //     #[test]
-    //     fn assemble_test_12() {
-    //         let mut result = String::new();
-    //         let indexes = vec![];
-    //         let separator = "";
-    //         let parts = vec!["1", "2"];
-    //         FixCountSeparator::generic_assemble(
-    //             &mut result,
-    //             indexes.iter().copied(),
-    //             &separator,
-    //             parts.iter().copied(),
-    //         );
-    //         assert_eq!(result, "12")
-    //     }
-    //
-    //     #[test]
-    //     fn assemble_test_1_2() {
-    //         let mut result = String::new();
-    //         let indexes = vec![1];
-    //         let separator = "_";
-    //         let parts = vec!["1", "2"];
-    //         FixCountSeparator::generic_assemble(
-    //             &mut result,
-    //             indexes.iter().copied(),
-    //             &separator,
-    //             parts.iter().copied(),
-    //         );
-    //         assert_eq!(result, "1_2")
-    //     }
-    //
-    //     #[test]
-    //     fn assemble_test___1_2() {
-    //         let mut result = String::new();
-    //         let indexes = vec![0, 1, 3];
-    //         let separator = "_";
-    //         let parts = vec!["1", "2"];
-    //         FixCountSeparator::generic_assemble(
-    //             &mut result,
-    //             indexes.iter().copied(),
-    //             &separator,
-    //             parts.iter().copied(),
-    //         );
-    //         assert_eq!(result, "__1_2")
-    //     }
-    //
-    //     #[test]
-    //     fn assemble_test_12_3() {
-    //         let mut result = String::new();
-    //         let indexes = vec![2];
-    //         let separator = "_";
-    //         let parts = vec!["1", "2", "3"];
-    //         FixCountSeparator::generic_assemble(
-    //             &mut result,
-    //             indexes.iter().copied(),
-    //             &separator,
-    //             parts.iter().copied(),
-    //         );
-    //         assert_eq!(result, "12_3")
-    //     }
-    //
-    //     #[test]
-    //     fn assemble_test_1_2_3_with_wrapping() {
-    //         let mut result = String::new();
-    //         let indexes = vec![0, 1, 2, 4, 6, 8, 9, 10];
-    //         let separator = "_";
-    //         let parts = vec!["1", "2", "3"];
-    //         FixCountSeparator::generic_assemble(
-    //             &mut result,
-    //             indexes.iter().copied(),
-    //             &separator,
-    //             parts.iter().copied(),
-    //         );
-    //         assert_eq!(result, "___1_2_3___")
-    //     }
-    //
-    //     #[test]
-    //     fn assemble_test__1_23() {
-    //         let mut result = String::new();
-    //         let indexes = vec![0, 2];
-    //         let separator = "_";
-    //         let parts = vec!["123"];
-    //         FixCountSeparator::generic_assemble(
-    //             &mut result,
-    //             indexes.iter().copied(),
-    //             &separator,
-    //             parts.iter().copied(),
-    //         );
-    //         assert_eq!(result, "_1_23")
-    //     }
-    //
-    //     #[test]
-    //     fn assemble_test__1__2_3456_7__8__9() {
-    //         let mut result = String::new();
-    //         let indexes = vec![0, 2, 3, 5, 10, 12, 13, 15, 16];
-    //         let separator = "_";
-    //         let parts = vec!["", "12", "", "3", "45", "", "678", "", "9"];
-    //         FixCountSeparator::generic_assemble(
-    //             &mut result,
-    //             indexes.iter().copied(),
-    //             &separator,
-    //             parts.iter().copied(),
-    //         );
-    //         assert_eq!(result, "_1__2_3456_7__8__9")
-    //     }
-    // }
-
     mod public_functional {
-        use super::{FixCountSeparator, SeparatorStrategy};
+        use super::super::FixCountSeparator;
+        use super::super::SeparatorStrategy;
         use rstest::{fixture, rstest};
 
         #[fixture]
@@ -597,57 +259,66 @@ mod tests {
         }
 
         #[rstest]
-        #[case(Vec::new(), "")]
-        #[case(vec![""], "")]
-        #[case(vec!["1",], "")]
-        #[case(vec!["biba",], "")]
-        #[case(vec!["", "",], "")]
-        #[case(vec!["1", "2",], "")]
-        #[case(vec!["1", "2", "3",], "")]
-        #[case(vec!["1", "2", "3", "4",], "")]
-        #[case(vec!["biba", "boba",], "")]
+        #[case(vec!["1",])]
+        #[case(vec!["biba",])]
+        #[case(vec!["1", "2",])]
+        #[case(vec!["1", "2", "3",])]
+        #[case(vec!["1", "2", "3", "4",])]
+        #[case(vec!["biba", "boba",])]
         #[should_panic]
-        fn without_separator_test(
-            #[from(without_separator)] separator: FixCountSeparator,
+        fn invalid_separator_panic_test(
+            #[values(
+                without_separator(),
+                without_count(),
+            )] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
-            #[case] output: &str,
         ) {
-            let result = separator.separate(&input);
-            assert_eq!(result, output);
+            separator.separate(&input);
         }
 
         #[rstest]
-        #[case(Vec::new(), "")]
-        #[case(vec![""], "")]
-        #[case(vec!["1",], "")]
-        #[case(vec!["biba",], "")]
-        #[case(vec!["", "",], "")]
-        #[case(vec!["1", "2",], "")]
-        #[case(vec!["1", "2", "3",], "")]
-        #[case(vec!["1", "2", "3", "4",], "")]
-        #[case(vec!["biba", "boba",], "")]
+        #[case(Vec::new())]
+        #[case(vec![""])]
+        #[case(vec!["", "",])]
         #[should_panic]
-        fn without_count_test(
-            #[from(without_count)] separator: FixCountSeparator,
+        fn invalid_data_panic_test(
+            #[values(
+                one_dash(),
+                one_long(),
+                multi_long(),
+            )] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
-            #[case] output: &str,
         ) {
-            let result = separator.separate(&input);
-            assert_eq!(result, output);
+            separator.separate(&input);
         }
 
         #[rstest]
-        #[should_panic]
-        #[case(Vec::new(), "")]
-        #[should_panic]
-        #[case(vec![""], "")]
-        #[case(vec!["1",], "")]
-        #[case(vec!["biba",], "")]
-        #[case(vec!["", "",], "")]
-        #[case(vec!["1", "2",], "")]
-        #[case(vec!["1", "2", "3",], "")]
-        #[case(vec!["1", "2", "3", "4",], "")]
-        #[case(vec!["biba", "boba",], "")]
+        #[case(vec!["1",])]
+        #[case(vec!["biba",])]
+        #[case(vec!["1", "2",])]
+        #[case(vec!["1", "2", "3",])]
+        #[case(vec!["1", "2", "3", "4",])]
+        #[case(vec!["biba", "boba",])]
+        fn length_test(
+            #[values(
+                one_dash(),
+                one_long(),
+                multi_long(),
+            )] separator: FixCountSeparator,
+            #[case] input: Vec<&str>,
+        ) {
+            let result_len = separator.separate(&input).len();
+            let compute_len = separator.length_after_separate(&input);
+            assert_eq!(result_len, compute_len);
+        }
+
+        #[rstest]
+        #[case(vec!["1",], "1")]
+        #[case(vec!["biba",], "bi-ba")]
+        #[case(vec!["1", "2",], "1-2")]
+        #[case(vec!["1", "2", "3",], "12-3")]
+        #[case(vec!["1", "2", "3", "4",], "12-34")]
+        #[case(vec!["biba", "boba",], "biba-boba")]
         fn one_dash_test(
             #[from(one_dash)] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
@@ -658,17 +329,12 @@ mod tests {
         }
 
         #[rstest]
-        #[should_panic]
-        #[case(Vec::new(), "")]
-        #[should_panic]
-        #[case(vec![""], "")]
-        #[case(vec!["1",], "")]
-        #[case(vec!["biba",], "")]
-        #[case(vec!["", "",], "")]
-        #[case(vec!["1", "2",], "")]
-        #[case(vec!["1", "2", "3",], "")]
-        #[case(vec!["1", "2", "3", "4",], "")]
-        #[case(vec!["biba", "boba",], "")]
+        #[case(vec!["1",], "1")]
+        #[case(vec!["biba",], "bibibaba")]
+        #[case(vec!["1", "2",], "1biba2")]
+        #[case(vec!["1", "2", "3",], "12biba3")]
+        #[case(vec!["1", "2", "3", "4",], "12biba34")]
+        #[case(vec!["biba", "boba",], "bibabibaboba")]
         fn one_long_test(
             #[from(one_long)] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
@@ -679,17 +345,12 @@ mod tests {
         }
 
         #[rstest]
-        #[should_panic]
-        #[case(Vec::new(), "")]
-        #[should_panic]
-        #[case(vec![""], "")]
-        #[case(vec!["1",], "")]
-        #[case(vec!["biba",], "")]
-        #[case(vec!["", "",], "")]
-        #[case(vec!["1", "2",], "")]
-        #[case(vec!["1", "2", "3",], "")]
-        #[case(vec!["1", "2", "3", "4",], "")]
-        #[case(vec!["biba", "boba",], "")]
+        #[case(vec!["1",], "1")]
+        #[case(vec!["biba",], "baAaiaAabaAaa")]
+        #[case(vec!["1", "2",], "1aAa2")]
+        #[case(vec!["1", "2", "3",], "1aAa2aAa3")]
+        #[case(vec!["1", "2", "3", "4",], "1aAa2aAa3aAa4")]
+        #[case(vec!["biba", "boba",], "biaAabaAaabaAaoaAaba")]
         fn multi_long_test(
             #[from(multi_long)] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
@@ -698,24 +359,19 @@ mod tests {
             let result = separator.separate(&input);
             assert_eq!(result, output);
         }
+    }
 
-        #[rstest]
-        #[case(Vec::new())]
-        #[case(vec![""])]
-        #[case(vec!["1",])]
-        #[case(vec!["biba",])]
-        #[case(vec!["", "",])]
-        #[case(vec!["1", "2",])]
-        #[case(vec!["1", "2", "3",])]
-        #[case(vec!["1", "2", "3", "4",])]
-        #[case(vec!["biba", "boba",])]
-        fn length_test(
-            #[values(one_dash(), one_long(), multi_long())] separator: FixCountSeparator,
-            #[case] input: Vec<&str>,
-        ) {
-            let result_len = separator.separate(&input).len();
-            let compute_len = separator.length_after_separate(&input);
-            assert_eq!(result_len, compute_len);
+    /// using for debug
+    mod internal {
+        use super::super::FixCountSeparator;
+
+        #[test]
+        fn len_3() {
+            let s = FixCountSeparator::new("-", 1);
+            let data = vec!["1", "2", "3",];
+            let m = s.get_meta_inf(&data);
+            let ind = s.separator_indexes(&m);
+            assert_eq!(ind, vec![2])
         }
     }
 }
