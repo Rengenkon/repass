@@ -100,8 +100,7 @@ impl<'a> FixCountSeparator<'a> {
     }
 
     fn parts_sizes(meta: &MetaInf) -> Vec<usize> {
-        if meta.chars_out_part & 2 == 1 && meta.parts_count % 2 == 0 {
-            // 3,4 7,8
+        if meta.chars_out_part % 2 == 1 && meta.parts_count % 2 == 0 {
             Self::align_parts_size(
                 meta.parts_count,
                 meta.chars_out_part,
