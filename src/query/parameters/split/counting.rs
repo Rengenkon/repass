@@ -89,5 +89,148 @@ impl SeparatorStrategy for FixIntervalSeparator<'_> {}
 
 #[cfg(test)]
 mod tests {
+    use rstest::{fixture, rstest};
+    use super::*;
 
+    #[fixture]
+    fn without_separator<'a>() -> FixIntervalSeparator<'a> {
+        FixIntervalSeparator{
+            separator: "",
+            length: 1
+        }
+    }
+
+    #[fixture]
+    fn without_count<'a>() -> FixIntervalSeparator<'a> {
+        FixIntervalSeparator{
+            separator: "biba",
+            length: 0
+        }
+    }
+
+    #[fixture]
+    fn one_dash<'a>() -> FixIntervalSeparator<'a> {
+        FixIntervalSeparator{
+            separator: "-",
+            length: 1
+        }
+    }
+
+    #[fixture]
+    fn one_long<'a>() -> FixIntervalSeparator<'a> {
+        FixIntervalSeparator{
+            separator: "biba",
+            length: 1
+        }
+    }
+
+    #[fixture]
+    fn multi_long<'a>() -> FixIntervalSeparator<'a> {
+        FixIntervalSeparator{
+            separator: "biba",
+            length: 3
+        }
+    }
+
+    #[rstest]
+    #[case(vec!["1",])]
+    #[case(vec!["biba",])]
+    #[case(vec!["1", "2",])]
+    #[case(vec!["1", "2", "3",])]
+    #[case(vec!["1", "2", "3", "4",])]
+    #[case(vec!["biba", "boba",])]
+    #[should_panic]
+    fn invalid_separator_panic_test(
+        #[values(
+            without_separator(),
+            without_count(),
+        )] separator: FixIntervalSeparator,
+        #[case] input: Vec<&str>,
+    ) {
+        separator.separate(&input);
+    }
+
+    #[rstest]
+    #[case(Vec::new())]
+    #[case(vec![""])]
+    #[case(vec!["", "",])]
+    #[should_panic]
+    fn invalid_data_panic_test(
+        #[values(
+            one_dash(),
+            one_long(),
+            multi_long(),
+        )] separator: FixIntervalSeparator,
+        #[case] input: Vec<&str>,
+    ) {
+        separator.separate(&input);
+    }
+
+    #[rstest]
+    #[case(vec!["1",])]
+    #[case(vec!["biba",])]
+    #[case(vec!["1", "2",])]
+    #[case(vec!["1", "2", "3",])]
+    #[case(vec!["1", "2", "3", "4",])]
+    #[case(vec!["biba", "boba",])]
+    fn length_test(
+        #[values(
+            one_dash(),
+            one_long(),
+            multi_long(),
+        )] separator: FixIntervalSeparator,
+        #[case] input: Vec<&str>,
+    ) {
+        let result_len = separator.separate(&input).len();
+        let compute_len = separator.length_after_separate(&input);
+        assert_eq!(result_len, compute_len);
+    }
+
+    #[rstest]
+    #[case(vec!["1",], "1")]
+    #[case(vec!["biba",], "b-i-b-a")]
+    #[case(vec!["1", "2",], "1-2")]
+    #[case(vec!["1", "2", "3",], "1-2-3")]
+    #[case(vec!["1", "2", "3", "4",], "1-2-3-4")]
+    #[case(vec!["biba", "boba",], "b-i-b-a-b-o-b-a")]
+    fn one_dash_test(
+        #[from(one_dash)] separator: FixIntervalSeparator,
+        #[case] input: Vec<&str>,
+        #[case] output: &str,
+    ) {
+        let result = separator.separate(&input);
+        assert_eq!(result, output);
+    }
+    
+    #[rstest]
+    #[case(vec!["1",], "1")]
+    #[case(vec!["biba",], "bbibaibibabbibaa")]
+    #[case(vec!["1", "2",], "1biba2")]
+    #[case(vec!["1", "2", "3",], "1biba2biba3")]
+    #[case(vec!["1", "2", "3", "4",], "1biba2biba3biba4")]
+    #[case(vec!["biba", "boba",], "bbibaibibabbibaabibabbibaobibabbibaa")]
+    fn one_long_test(
+        #[from(one_long)] separator: FixIntervalSeparator,
+        #[case] input: Vec<&str>,
+        #[case] output: &str,
+    ) {
+        let result = separator.separate(&input);
+        assert_eq!(result, output);
+    }
+
+    #[rstest]
+    #[case(vec!["1",], "1")]
+    #[case(vec!["biba",], "bibbibaa")]
+    #[case(vec!["1", "2",], "12")]
+    #[case(vec!["1", "2", "3",], "123")]
+    #[case(vec!["1", "2", "3", "4",], "123biba4")]
+    #[case(vec!["biba", "boba",], "bibbibaabobibaba")]
+    fn multi_long_test(
+        #[from(multi_long)] separator: FixIntervalSeparator,
+        #[case] input: Vec<&str>,
+        #[case] output: &str,
+    ) {
+        let result = separator.separate(&input);
+        assert_eq!(result, output);
+    }
 }

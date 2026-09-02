@@ -33,15 +33,12 @@ impl SeparatorInternal for WithoutSeparator {
 impl SeparatorStrategy for WithoutSeparator {}
 
 mod tests {
-    use super::super::*;
-    use super::WithoutSeparator;
-    use std::vec;
-    use rstest::rstest;
+    use super::{WithoutSeparator, SeparatorStrategy};
+    use rstest::{fixture, rstest};
 
     #[rstest]
     #[case(vec!["1",])]
     #[case(vec!["biba",])]
-    #[case(vec!["", "",])]
     #[case(vec!["1", "2",])]
     #[case(vec!["1", "2", "3",])]
     #[case(vec!["1", "2", "3", "4",])]
@@ -55,13 +52,24 @@ mod tests {
         assert_eq!(result_len, compute_len);
     }
 
+    #[fixture]
+    fn separator() -> WithoutSeparator {
+        WithoutSeparator::new()
+    }
+
     #[rstest]
+    #[case(Vec::new())]
+    #[case(vec![""])]
+    #[case(vec!["", "",])]
     #[should_panic]
-    #[case(Vec::new(), "")]
-    #[should_panic]
-    #[case(vec![""], "")]
-    #[should_panic]
-    #[case(vec!["", "",], "")]
+    fn panic_test(
+        #[values(separator())] separator: WithoutSeparator,
+        #[case] input: Vec<&str>,
+    ) {
+        separator.separate(&input);
+    }
+
+    #[rstest]
     #[case(vec!["1",], "1")]
     #[case(vec!["biba",], "biba")]
     #[case(vec!["1", "2",], "12")]
@@ -69,7 +77,7 @@ mod tests {
     #[case(vec!["1", "2", "3", "4",], "1234")]
     #[case(vec!["biba", "boba",], "bibaboba")]
     fn multi_long_test(
-        #[values(WithoutSeparator::new())] separator: WithoutSeparator,
+        #[values(separator())] separator: WithoutSeparator,
         #[case] input: Vec<&str>,
         #[case] output: &str,
     ) {

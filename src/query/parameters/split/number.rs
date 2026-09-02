@@ -229,8 +229,7 @@ impl SeparatorStrategy for FixCountSeparator<'_> {}
 #[cfg(test)]
 mod tests {
     mod public_functional {
-        use super::super::FixCountSeparator;
-        use super::super::SeparatorStrategy;
+        use super::super::{FixCountSeparator, SeparatorStrategy};
         use rstest::{fixture, rstest};
 
         #[fixture]

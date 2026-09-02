@@ -41,9 +41,8 @@ impl SeparatorStrategy for BetweenPartsSeparator<'_> {}
 
 #[cfg(test)]
 mod tests {
-    use rstest::fixture;
-    use super::BetweenPartsSeparator;
-    use super::SeparatorStrategy;
+    use rstest::{fixture, rstest};
+    use super::{BetweenPartsSeparator, SeparatorStrategy};
     
     #[fixture]
     fn empty<'a>() -> BetweenPartsSeparator<'a> {
@@ -60,5 +59,67 @@ mod tests {
         BetweenPartsSeparator::new("boba")
     }
 
-    
+    #[rstest]
+    #[case(vec!["1",])]
+    #[case(vec!["biba",])]
+    #[case(vec!["1", "2",])]
+    #[case(vec!["1", "2", "3",])]
+    #[case(vec!["1", "2", "3", "4",])]
+    #[case(vec!["biba", "boba",])]
+    #[should_panic]
+    fn invalid_separator_panic_test(
+        #[values(
+            empty(),
+        )] separator: BetweenPartsSeparator,
+        #[case] input: Vec<&str>,
+    ) {
+        separator.separate(&input);
+    }
+
+    #[rstest]
+    #[case(Vec::new())]
+    #[case(vec![""])]
+    #[case(vec!["", "",])]
+    #[should_panic]
+    fn invalid_data_panic_test(
+        #[values(
+            dash(),
+            long(),
+        )] separator: BetweenPartsSeparator,
+        #[case] input: Vec<&str>,
+    ) {
+        separator.separate(&input);
+    }
+
+    #[rstest]
+    #[case(vec!["1",], "1")]
+    #[case(vec!["biba",], "biba")]
+    #[case(vec!["1", "2",], "1-2")]
+    #[case(vec!["1", "2", "3",], "1-2-3")]
+    #[case(vec!["1", "2", "3", "4",], "1-2-3-4")]
+    #[case(vec!["biba", "boba",], "biba-boba")]
+    fn dash_test(
+        #[from(dash)] separator: BetweenPartsSeparator,
+        #[case] input: Vec<&str>,
+        #[case] output: &str,
+    ) {
+        let result = separator.separate(&input);
+        assert_eq!(result, output);
+    }
+
+    #[rstest]
+    #[case(vec!["1",], "1")]
+    #[case(vec!["biba",], "biba")]
+    #[case(vec!["1", "2",], "1boba2")]
+    #[case(vec!["1", "2", "3",], "1boba2boba3")]
+    #[case(vec!["1", "2", "3", "4",], "1boba2boba3boba4")]
+    #[case(vec!["biba", "boba",], "bibabobaboba")]
+    fn long_test(
+        #[from(long)] separator: BetweenPartsSeparator,
+        #[case] input: Vec<&str>,
+        #[case] output: &str,
+    ) {
+        let result = separator.separate(&input);
+        assert_eq!(result, output);
+    }
 }
