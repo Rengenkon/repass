@@ -15,15 +15,15 @@ struct MetaInf {
     chars_out_part: usize,
 }
 
-/// Separate parts with setuped count of separate segments.
+/// Separate parts with setuped count of separator segments.
 /// Length of parts doesn't matter
 ///
 /// # Note
-/// `X` - setuped count of separate segments
+/// `X` - setuped count of separator segments
 /// `L` - summary length of given parts
 ///
 /// If `L` less that `X + 1`
-/// Then use only `L - 1` separate segment
+/// Then use only `L - 1` separator segment
 ///
 /// If 'L' equals 0 then program panic
 #[derive(Debug)]

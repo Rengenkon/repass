@@ -1,4 +1,6 @@
 pub mod query;
+pub mod generator;
+pub mod separator;
 
 pub fn generate(query: query::Query) -> Vec<String> {
     todo!()

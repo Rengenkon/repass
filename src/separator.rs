@@ -42,7 +42,7 @@ trait SeparatorInternal {
 ///
 /// 'Sequence' is 'parts or character of parts'
 pub trait SeparatorStrategy: SeparatorInternal {
-    /// Separate sequence with setuped separate segment
+    /// Separate sequence with setuped separator segment
     fn separate(self: &Self, parts: &[&str]) -> String {
         self.panic_with_errors(parts, Self::add_separator)
     }
