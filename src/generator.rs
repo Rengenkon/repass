@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, Bound};
+use std::path::Path;
 
 pub trait FuzzyGet<K, V> {
     fn get_left<Q: ?Sized>(&self, key: &Q) -> Option<&V>
@@ -35,19 +36,54 @@ impl<K, V> FuzzyGet<K, V> for BTreeMap<K, V> {
     }
 }
 
-pub struct Dictionary {
-    dictionary: Vec<String>,
+trait Dictionary {
+    fn get<'a>(self: &Self, index: usize) -> &'a str;
 }
 
-impl Dictionary {
-    pub fn new() -> Self {
-        Dictionary {
-            dictionary: Vec::new(),
-        }
+pub struct FileDictionary {
+    dictionary: Vec<String>,
+    case_change: bool,
+}
+
+impl Dictionary for FileDictionary {
+    fn get<'a>(self: &Self, index: usize) -> &'a str {
+        let x = self.dictionary.get(index)?;
+        x.as_str()
+    }
+}
+
+impl FileDictionary {
+    pub fn new(path: Box<Path>) -> Self {
+        todo!()
     }
 
-    pub fn add_numbers(self: Self) {
+    pub fn new_with_escape(path: Box<Path>, escape: char) -> Self {
         todo!()
+    }
+}
+
+pub struct SymbolicDictionary<'a> {
+    length: usize,
+    dictionary: BTreeMap<usize, &'a [&'a str]>,
+}
+
+impl<'b> Dictionary for SymbolicDictionary<'b> {
+    fn get<'a>(self: &Self, index: usize) -> &'a str {
+        let part = self.dictionary.get_left(&index)?;
+        let index = index % part.len();
+        part[index]
+    }
+}
+
+impl<'a> SymbolicDictionary<'a> {
+    pub fn new() -> Self {
+        todo!()
+    }
+
+    // todo add value several times
+    pub fn add(self: &mut Self, value: &'a [&'a str]) {
+        self.dictionary.insert(self.length, value);
+        self.length += value.len();
     }
 
     fn numbers() -> &'static [&'static str] {
@@ -56,15 +92,15 @@ impl Dictionary {
 
     fn lowercase() -> &'static [&'static str] {
         &[
-            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q",
+            "r", "s", "t", "u", "v", "w", "x", "y", "z",
         ]
     }
 
     fn uppercase() -> &'static [&'static str] {
         &[
-            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
-            "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q",
+            "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
         ]
     }
 
@@ -91,10 +127,16 @@ impl Dictionary {
     fn special_escape() -> &'static [&'static str] {
         &["\\", "|", "~"]
     }
+
+    pub fn add_numbers(self: &mut Self) {
+        self.add(Self::numbers());
+    }
 }
 
 struct Generator {}
 
 impl Generator {
-    fn generate(dictionary: Dictionary) -> Vec<String> {}
+    fn generate(dictionary: impl Dictionary) -> Vec<String> {
+        todo!()
+    }
 }
