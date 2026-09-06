@@ -18,7 +18,7 @@ impl SeparatorInternal for BetweenPartsSeparator<'_> {
     }
 
     fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
-        let base_length = Self::get_summary_length(parts);
+        let base_length = super::get_summary_length(parts);
         base_length + self.separator.len() * (parts.len() - 1)
     }
 
@@ -30,7 +30,7 @@ impl SeparatorInternal for BetweenPartsSeparator<'_> {
         if parts.is_empty() {
             errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
         }
-        if Self::get_summary_length(parts) == 0 {
+        if super::get_summary_length(parts) == 0 {
             errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
         }
         errors

@@ -58,7 +58,7 @@ impl SeparatorInternal for FixIntervalSeparator<'_> {
     }
 
     fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
-        let sum_length = Self::get_summary_length(parts);
+        let sum_length = super::get_summary_length(parts);
         let mut separators_count = sum_length / self.length;
         if separators_count > 0 && sum_length % self.length == 0 {
             separators_count -= 1;
@@ -78,7 +78,7 @@ impl SeparatorInternal for FixIntervalSeparator<'_> {
         if parts.is_empty() {
             errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
         }
-        if Self::get_summary_length(parts) == 0 {
+        if super::get_summary_length(parts) == 0 {
             errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
         }
         errors

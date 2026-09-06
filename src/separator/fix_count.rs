@@ -42,7 +42,7 @@ impl<'a> FixCountSeparator<'a> {
     }
 
     fn get_meta_inf(self: &Self, parts: &[&str]) -> MetaInf {
-        let input_length = Self::get_summary_length(parts);
+        let input_length = super::get_summary_length(parts);
         let separates_count = self.count_separates(input_length);
         let parts_count = separates_count + 1;
         let in_part = input_length / parts_count;
@@ -202,7 +202,7 @@ impl SeparatorInternal for FixCountSeparator<'_> {
     }
 
     fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
-        let summary = Self::get_summary_length(parts);
+        let summary = super::get_summary_length(parts);
         summary + self.count_separates(summary) * self.separator.len()
     }
 
@@ -217,7 +217,7 @@ impl SeparatorInternal for FixCountSeparator<'_> {
         if parts.is_empty() {
             errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
         }
-        if Self::get_summary_length(parts) == 0 {
+        if super::get_summary_length(parts) == 0 {
             errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
         }
         errors

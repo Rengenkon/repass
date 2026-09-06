@@ -15,7 +15,7 @@ impl SeparatorInternal for WithoutSeparator {
     }
 
     fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
-        Self::get_summary_length(parts)
+        super::get_summary_length(parts)
     }
 
     fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
@@ -23,7 +23,7 @@ impl SeparatorInternal for WithoutSeparator {
         if parts.is_empty() {
             errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
         }
-        if Self::get_summary_length(parts) == 0 {
+        if super::get_summary_length(parts) == 0 {
             errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
         }
         errors
