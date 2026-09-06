@@ -37,7 +37,7 @@ impl<K, V> FuzzyGet<K, V> for BTreeMap<K, V> {
 }
 
 trait Dictionary {
-    fn get<'a>(self: &Self, index: usize) -> &'a str;
+    fn get(self: &Self, index: usize) -> Option<&str>;
 }
 
 pub struct FileDictionary {
@@ -46,9 +46,9 @@ pub struct FileDictionary {
 }
 
 impl Dictionary for FileDictionary {
-    fn get<'a>(self: &Self, index: usize) -> &'a str {
+    fn get(self: &Self, index: usize) -> Option<&str> {
         let x = self.dictionary.get(index)?;
-        x.as_str()
+        Some(x.as_str())
     }
 }
 
@@ -68,10 +68,10 @@ pub struct SymbolicDictionary<'a> {
 }
 
 impl<'b> Dictionary for SymbolicDictionary<'b> {
-    fn get<'a>(self: &Self, index: usize) -> &'a str {
+    fn get(self: &Self, index: usize) -> Option<&str> {
         let part = self.dictionary.get_left(&index)?;
         let index = index % part.len();
-        part[index]
+        Some(part[index])
     }
 }
 
