@@ -38,6 +38,8 @@ impl<K, V> FuzzyGet<K, V> for BTreeMap<K, V> {
 
 trait Dictionary {
     fn get(self: &Self, index: usize) -> Option<&str>;
+
+    fn len(self: &Self) -> usize;
 }
 
 pub struct FileDictionary {
@@ -133,10 +135,57 @@ impl<'a> SymbolicDictionary<'a> {
     }
 }
 
-struct Generator {}
+pub enum Length {
+    Float(usize, usize),
+    Hard(usize),
+}
 
-impl Generator {
-    fn generate(dictionary: impl Dictionary) -> Vec<String> {
+impl Length {
+    pub fn to_one_size(self: &Self) -> usize {
+        match self {
+            Length::Float(min, max) => rand::random_range(*min..=*max),
+            Length::Hard(value) => *value,
+        }
+    }
+}
+
+pub struct Query<'a> {
+    count: usize,
+    length: Length,
+    dictionary: Box<&'a dyn Dictionary>,
+    separator: Box<&'a dyn SeparatorStrategy>,
+}
+
+impl<'a> Default for Query<'a> {
+    fn default() -> Self {
         todo!()
     }
+}
+
+fn generate_parts<'a>(dict: &Box<&'a dyn Dictionary>, space: usize) -> Vec<&'a str> {
+    let mut result = Vec::new();
+    let mut none_count = 0;
+    while result.len() < space {
+        let index = rand::random_range(0..dict.len());
+        match dict.get(index) {
+            None => none_count += 1,
+            Some(value) => result.push(value),
+        }
+        if none_count > 100 {
+            panic!("Not valid dictionary: attempts to get element is unsuccessful")
+        }
+    }
+    result
+}
+
+pub fn generate(query: &Query) -> Vec<String> {
+    let length = query.length.to_one_size();
+    let space = query.separator.compute_count_free_chars(length);
+    let mut result = Vec::new();
+    for _ in 0..query.count {
+        let parts = generate_parts(&query.dictionary, space);
+        let separated = query.separator.add_separator(parts.as_slice());
+        result.push(separated);
+    }
+    result
 }

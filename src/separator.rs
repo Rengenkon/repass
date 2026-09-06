@@ -54,6 +54,8 @@ pub trait SeparatorStrategy: SeparatorInternal {
     fn validate(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
         self.chack_errors(parts)
     }
+    
+    fn compute_count_free_chars(self: &Self, max_length: usize) -> usize;
 }
 
 #[derive(Debug, EnumDisplay)]
