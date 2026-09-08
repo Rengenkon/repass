@@ -1,4 +1,4 @@
-use super::{IllegalArgumentError, SeparatorStrategy, SeparatorInternal};
+use super::{DEFAULT_SEPARATOR, IllegalArgumentError, Separator, SeparatorInternal};
 use core::str;
 
 #[derive(Debug)]
@@ -9,6 +9,14 @@ pub struct BetweenPartsSeparator<'a> {
 impl<'a> BetweenPartsSeparator<'a> {
     pub fn new(separator: &'a str) -> Self {
         Self { separator }
+    }
+}
+
+impl<'a> Default for BetweenPartsSeparator<'a> {
+    fn default() -> Self {
+        Self {
+            separator: DEFAULT_SEPARATOR,
+        }
     }
 }
 
@@ -37,13 +45,17 @@ impl SeparatorInternal for BetweenPartsSeparator<'_> {
     }
 }
 
-impl SeparatorStrategy for BetweenPartsSeparator<'_> {}
+impl Separator for BetweenPartsSeparator<'_> {
+    fn try_compute_free_space(self: &Self, target_length: usize) -> Option<usize> {
+        None
+    }
+}
 
 #[cfg(test)]
 mod tests {
+    use super::{BetweenPartsSeparator, Separator};
     use rstest::{fixture, rstest};
-    use super::{BetweenPartsSeparator, SeparatorStrategy};
-    
+
     #[fixture]
     fn empty<'a>() -> BetweenPartsSeparator<'a> {
         BetweenPartsSeparator::new("")
@@ -68,9 +80,7 @@ mod tests {
     #[case(vec!["biba", "boba",])]
     #[should_panic]
     fn invalid_separator_panic_test(
-        #[values(
-            empty(),
-        )] separator: BetweenPartsSeparator,
+        #[values(empty())] separator: BetweenPartsSeparator,
         #[case] input: Vec<&str>,
     ) {
         separator.separate(&input);
@@ -82,10 +92,7 @@ mod tests {
     #[case(vec!["", "",])]
     #[should_panic]
     fn invalid_data_panic_test(
-        #[values(
-            dash(),
-            long(),
-        )] separator: BetweenPartsSeparator,
+        #[values(dash(), long())] separator: BetweenPartsSeparator,
         #[case] input: Vec<&str>,
     ) {
         separator.separate(&input);

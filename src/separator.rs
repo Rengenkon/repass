@@ -1,9 +1,11 @@
 use enum_display::EnumDisplay;
 
+pub mod fix_count;
 pub mod interval;
 pub mod no_split;
-pub mod fix_count;
 pub mod on_parts;
+
+static DEFAULT_SEPARATOR: &str = "-";
 
 fn get_summary_length(parts: &[&str]) -> usize {
     parts.iter().map(|part| part.len()).sum::<usize>()
@@ -50,11 +52,11 @@ pub trait Separator: SeparatorInternal {
         self.length_with_separators(parts)
     }
 
-    /// Compute count free spaces for chars for `target_length`
+    /// Compute count free spaces for chars for `target_length` if it possible
     /// Guarantee that for `summary parts length` equals returned value of `free_space`
     /// - method `length_after_separate` return the value equals `target_length`
     /// - length of returned value of method `separate` equals `target_length`
-    fn free_space(self: &Self, target_length: usize) -> usize;
+    fn try_compute_free_space(self: &Self, target_length: usize) -> Option<usize>;
 
     /// Check common errors in Separator or parts
     fn validate(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
