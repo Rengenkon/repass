@@ -69,8 +69,23 @@ impl<'a> SymbolicDictionary<'a> {
         }
     }
 
+    pub fn add_all(self: &mut Self) -> &mut Self {
+        self.add_numbers().add_lowercase().add_uppercase();
+        self
+    }
+
     pub fn add_numbers(self: &mut Self) -> &mut Self {
         self.add(numbers());
+        self
+    }
+
+    pub fn add_lowercase(self: &mut Self) -> &mut Self {
+        self.add(lowercase());
+        self
+    }
+
+    pub fn add_uppercase(self: &mut Self) -> &mut Self {
+        self.add(uppercase());
         self
     }
 

@@ -1,5 +1,6 @@
 pub mod file_dictionary;
 pub mod static_dictionary;
+pub mod services;
 
 pub trait Dictionary {
     fn get(self: &Self, index: usize) -> Option<&str>;
