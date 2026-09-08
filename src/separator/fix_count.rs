@@ -241,7 +241,7 @@ impl Separator for FixCountSeparator<'_> {
         let pairs_len = (target_length - 1);
         let one_pair_len = (self.separator.len() + 1);
         let virtual_count = pairs_len / one_pair_len;
-        if virtual_count <= self.count && pairs_len % one_pair_len != 0 {
+        if virtual_count < self.count && pairs_len % one_pair_len != 0 {
             return None;
         }
         let count_separators = min(self.count, virtual_count);
