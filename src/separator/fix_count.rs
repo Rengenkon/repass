@@ -1,4 +1,4 @@
-use super::{IllegalArgumentError, Separator, SeparatorInternal, DEFAULT_SEPARATOR};
+use super::{DEFAULT_SEPARATOR, IllegalArgumentError, Separator, SeparatorInternal};
 use std::cmp::{Ordering, max, min};
 
 #[derive(Debug, PartialEq)]
@@ -20,12 +20,7 @@ fn separator_indexes(meta: &MetaInf) -> Vec<usize> {
     part_sizes_to_separators_indexes(0, &parts_size[0..meta.separates_count])
 }
 
-fn align_parts_size(
-    capacity: usize,
-    out_part: usize,
-    in_part: usize,
-    align: Align,
-) -> Vec<usize> {
+fn align_parts_size(capacity: usize, out_part: usize, in_part: usize, align: Align) -> Vec<usize> {
     let mut sizes = Vec::with_capacity(capacity);
     for part in 0..capacity {
         if (align == Align::Left && part < out_part)
@@ -140,7 +135,7 @@ impl<'a> FixCountSeparator<'a> {
         }
     }
 
-    fn generic_assemble<'b>(self: &Self, separate_indexes: &[usize], raw_parts: &[&str]) -> String {
+    fn generic_assemble(self: &Self, separate_indexes: &[usize], raw_parts: &[&str]) -> String {
         let capacity = self.length_with_separators(raw_parts);
         let mut result = String::with_capacity(capacity);
         let mut indexes_iter = separate_indexes.iter();
@@ -198,7 +193,7 @@ impl<'a> Default for FixCountSeparator<'a> {
     fn default() -> Self {
         Self {
             separator: DEFAULT_SEPARATOR,
-            count: 3
+            count: 3,
         }
     }
 }
@@ -238,8 +233,8 @@ impl Separator for FixCountSeparator<'_> {
         if target_length == 0 {
             return None;
         }
-        let pairs_len = (target_length - 1);
-        let one_pair_len = (self.separator.len() + 1);
+        let pairs_len = target_length - 1;
+        let one_pair_len = self.separator.len() + 1;
         let virtual_count = pairs_len / one_pair_len;
         if virtual_count < self.count && pairs_len % one_pair_len != 0 {
             return None;
@@ -253,8 +248,8 @@ impl Separator for FixCountSeparator<'_> {
 mod tests {
     mod public_functional {
         use super::super::{FixCountSeparator, Separator};
-        use rstest::{fixture, rstest};
         use crate::separator::get_summary_length;
+        use rstest::{fixture, rstest};
 
         #[fixture]
         fn without_separator<'a>() -> FixCountSeparator<'a> {
@@ -388,7 +383,6 @@ mod tests {
             let spaces = separator.try_compute_free_space(compute_len).unwrap();
             assert_eq!(stat_len, spaces);
         }
-
 
         #[rstest]
         #[case(0, None)]
