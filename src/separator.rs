@@ -35,7 +35,7 @@ pub trait SeparatorInternal {
 /// Determine public functions for working with 'Separators'
 ///
 /// 'Sequence' is 'parts or character of parts'
-pub trait SeparatorStrategy: SeparatorInternal {
+pub trait Separator: SeparatorInternal {
     /// Separate sequence with setuped separator segment
     fn separate(self: &Self, parts: &[&str]) -> String {
         let errors = self.chack_errors(parts);
@@ -50,12 +50,16 @@ pub trait SeparatorStrategy: SeparatorInternal {
         self.length_with_separators(parts)
     }
 
+    /// Compute count free spaces for chars for `target_length`
+    /// Guarantee that for `summary parts length` equals returned value of `free_space`
+    /// - method `length_after_separate` return the value equals `target_length`
+    /// - length of returned value of method `separate` equals `target_length`
+    fn free_space(self: &Self, target_length: usize) -> usize;
+
     /// Check common errors in Separator or parts
     fn validate(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
         self.chack_errors(parts)
     }
-    
-    fn compute_count_free_chars(self: &Self, max_length: usize) -> usize;
 }
 
 #[derive(Debug, EnumDisplay)]
