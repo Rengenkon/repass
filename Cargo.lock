@@ -265,6 +265,9 @@ dependencies = [
 [[package]]
 name = "repass_storage"
 version = "0.1.0"
+dependencies = [
+ "repass_generator",
+]
 
 [[package]]
 name = "rstest"
