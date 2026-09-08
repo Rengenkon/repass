@@ -39,7 +39,7 @@ impl<K, V> FuzzyGet<K, V> for BTreeMap<K, V> {
     }
 }
 
-trait Dictionary {
+pub trait Dictionary {
     fn get(self: &Self, index: usize) -> Option<&str>;
 
     fn len(self: &Self) -> usize;
@@ -153,45 +153,45 @@ impl<'a> Default for SymbolicDictionary<'a> {
     }
 }
 
-fn numbers() -> &'static [&'static str] {
+pub fn numbers() -> &'static [&'static str] {
     &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
 }
 
-fn lowercase() -> &'static [&'static str] {
+pub fn lowercase() -> &'static [&'static str] {
     &[
         "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r",
         "s", "t", "u", "v", "w", "x", "y", "z",
     ]
 }
 
-fn uppercase() -> &'static [&'static str] {
+pub fn uppercase() -> &'static [&'static str] {
     &[
         "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R",
         "S", "T", "U", "V", "W", "X", "Y", "Z",
     ]
 }
 
-fn special_punctuation() -> &'static [&'static str] {
+pub fn special_punctuation() -> &'static [&'static str] {
     &["!", "?", ".", ",", ";", ":"]
 }
 
-fn special_math() -> &'static [&'static str] {
+pub fn special_math() -> &'static [&'static str] {
     &["_", "-", "@", "=", "+", "*", "/"]
 }
 
-fn special_brackets() -> &'static [&'static str] {
+pub fn special_brackets() -> &'static [&'static str] {
     &["(", ")", "[", "]", "{", "}"]
 }
 
-fn special_quotes() -> &'static [&'static str] {
+pub fn special_quotes() -> &'static [&'static str] {
     &["\"", "'", "`", "&"]
 }
 
-fn special_hash_percent() -> &'static [&'static str] {
+pub fn special_hash_percent() -> &'static [&'static str] {
     &["#", "$", "%", "^"]
 }
 
-fn special_escape() -> &'static [&'static str] {
+pub fn special_escape() -> &'static [&'static str] {
     &["\\", "|", "~"]
 }
 
