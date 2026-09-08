@@ -1,5 +1,8 @@
+use crate::separator::SeparatorStrategy;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, Bound};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 pub trait FuzzyGet<K, V> {
@@ -52,15 +55,29 @@ impl Dictionary for FileDictionary {
         let x = self.dictionary.get(index)?;
         Some(x.as_str())
     }
+
+    fn len(self: &Self) -> usize {
+        self.dictionary.len()
+    }
 }
 
 impl FileDictionary {
     pub fn new(path: Box<Path>) -> Self {
-        todo!()
-    }
-
-    pub fn new_with_escape(path: Box<Path>, escape: char) -> Self {
-        todo!()
+        let file = File::open(path);
+        let mut reader = BufReader::new(file.unwrap());
+        let mut dictionary = Vec::new();
+        loop {
+            let mut buf = String::new();
+            let n = reader.read_line(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            dictionary.push(buf);
+        }
+        FileDictionary {
+            dictionary,
+            case_change: false,
+        }
     }
 }
 
@@ -75,11 +92,18 @@ impl<'b> Dictionary for SymbolicDictionary<'b> {
         let index = index % part.len();
         Some(part[index])
     }
+
+    fn len(self: &Self) -> usize {
+        self.length
+    }
 }
 
 impl<'a> SymbolicDictionary<'a> {
     pub fn new() -> Self {
-        todo!()
+        SymbolicDictionary{
+            length: 0,
+            dictionary: BTreeMap::new()
+        }
     }
 
     // todo add value several times
@@ -135,6 +159,14 @@ impl<'a> SymbolicDictionary<'a> {
     }
 }
 
+impl<'a> Default for SymbolicDictionary<'a> {
+    fn default() -> Self {
+        let mut s = Self::new();
+        s.add_numbers();
+        s
+    }
+}
+
 pub enum Length {
     Float(usize, usize),
     Hard(usize),
@@ -156,20 +188,37 @@ pub struct Query<'a> {
     separator: Box<&'a dyn SeparatorStrategy>,
 }
 
-impl<'a> Default for Query<'a> {
-    fn default() -> Self {
-        todo!()
+impl<'a> Query<'a> {
+    pub fn new(
+        count: usize,
+        length: Length,
+        dictionary: Box<&'a dyn Dictionary>,
+        separator: Box<&'a dyn SeparatorStrategy>,
+    ) -> Self {
+        Query {
+            count,
+            length,
+            dictionary,
+            separator,
+        }
     }
 }
 
+/// Generate sequence of parts from `dictionary`
+/// not guarantee that summary length of returned value equals `space`
 fn generate_parts<'a>(dict: &Box<&'a dyn Dictionary>, space: usize) -> Vec<&'a str> {
+    let len = dict.len();
     let mut result = Vec::new();
     let mut none_count = 0;
-    while result.len() < space {
-        let index = rand::random_range(0..dict.len());
+    let mut current_len = 0;
+    while current_len < space {
+        let index = rand::random_range(0..len);
         match dict.get(index) {
             None => none_count += 1,
-            Some(value) => result.push(value),
+            Some(value) => {
+                result.push(value);
+                current_len += value.len();
+            }
         }
         if none_count > 100 {
             panic!("Not valid dictionary: attempts to get element is unsuccessful")
