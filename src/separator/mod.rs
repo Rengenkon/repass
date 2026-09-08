@@ -66,12 +66,7 @@ pub trait Separator: SeparatorInternal {
 
 #[derive(Debug, EnumDisplay)]
 pub enum IllegalArgumentError {
-    #[display("")]
     EmptySeparator,
-    #[display("")]
     AdditionalParameterIsZero,
-    #[display("")]
     SummaryLengthOfPartsIsZero,
-    #[display("")]
-    Specific(String),
 }

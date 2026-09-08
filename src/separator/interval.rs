@@ -82,10 +82,7 @@ impl SeparatorInternal for FixIntervalSeparator<'_> {
         if self.interval == 0 {
             errors.push(IllegalArgumentError::AdditionalParameterIsZero)
         }
-        if parts.is_empty() {
-            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
-        }
-        if super::get_summary_length(parts) == 0 {
+        if parts.is_empty() || super::get_summary_length(parts) == 0 {
             errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
         }
         errors

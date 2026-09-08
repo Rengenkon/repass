@@ -1,4 +1,4 @@
-use super::{IllegalArgumentError, Separator, SeparatorInternal};
+use crate::separator::{IllegalArgumentError, Separator, SeparatorInternal};
 
 #[derive(Debug)]
 pub struct WithoutSeparator {}
@@ -43,7 +43,8 @@ impl Separator for WithoutSeparator {
 }
 
 mod tests {
-    use super::{Separator, WithoutSeparator};
+    use super::WithoutSeparator;
+    use crate::separator::Separator;
     use rstest::{fixture, rstest};
 
     #[rstest]

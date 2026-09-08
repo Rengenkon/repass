@@ -3,14 +3,14 @@ use crate::query::Query;
 use crate::separator::Separator;
 
 fn generate_parts_unknown<'a>(
-    dictionary: &Box<&'a dyn Dictionary>,
-    separator: &Box<&dyn Separator>,
+    dictionary: &'a dyn Dictionary,
+    separator: &dyn Separator,
     target_length: usize,
 ) -> Vec<&'a str> {
     let len = dictionary.len();
     let mut result = Vec::new();
     let mut none_count = 0;
-    while separator.length_after_separate(&result) < target_length {
+    while separator.length_with_separators(&result) < target_length {
         let index = rand::random_range(0..len);
         match dictionary.get(index) {
             None => none_count += 1,
@@ -25,7 +25,7 @@ fn generate_parts_unknown<'a>(
 
 /// Generate sequence of parts from `dictionary`
 /// not guarantee that summary length of returned value equals `space`
-fn generate_parts<'a>(dictionary: &Box<&'a dyn Dictionary>, space: usize) -> Vec<&'a str> {
+fn generate_parts<'a>(dictionary: &'a dyn Dictionary, space: usize) -> Vec<&'a str> {
     let len = dictionary.len();
     let mut result = Vec::new();
     let mut none_count = 0;
@@ -47,14 +47,14 @@ fn generate_parts<'a>(dictionary: &Box<&'a dyn Dictionary>, space: usize) -> Vec
 }
 
 fn generate(
-    dictionary: &Box<&dyn Dictionary>,
-    separator: &Box<&dyn Separator>,
+    dictionary: &dyn Dictionary,
+    separator: &dyn Separator,
     space: Option<usize>,
     target_length: usize,
 ) -> String {
     let parts = match space {
-        None => generate_parts_unknown(&dictionary, &separator, target_length),
-        Some(value) => generate_parts(&dictionary, value),
+        None => generate_parts_unknown(dictionary, separator, target_length),
+        Some(value) => generate_parts(dictionary, value),
     };
     separator.add_separator(parts.as_slice())
 }
@@ -74,4 +74,26 @@ pub fn generate_multi(query: &Query, count: usize) -> Vec<String> {
         result.push(generate);
     }
     result
+}
+
+
+#[cfg(test)]
+mod tests {
+    use crate::dictionary::static_dictionary::SymbolicDictionary;
+    use crate::generator::generate;
+    use crate::separator::interval::FixIntervalSeparator;
+
+    #[test]
+    fn with_none() {
+        let dict = SymbolicDictionary::default();
+        let sep = FixIntervalSeparator::default();
+        let target = 20;
+
+        let x = generate(&dict, &sep, None, target);
+        assert!(!x.is_empty())
+    }
+
+    fn with_some() {
+
+    }
 }
