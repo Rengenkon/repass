@@ -235,7 +235,16 @@ impl SeparatorInternal for FixCountSeparator<'_> {
 
 impl Separator for FixCountSeparator<'_> {
     fn try_compute_free_space(self: &Self, target_length: usize) -> Option<usize> {
-        let count_separators = min(self.count, (target_length + 1) / (self.separator.len() + 1) - 1);
+        if target_length == 0 {
+            return None;
+        }
+        let pairs_len = (target_length - 1);
+        let one_pair_len = (self.separator.len() + 1);
+        let virtual_count = pairs_len / one_pair_len;
+        if virtual_count <= self.count && pairs_len % one_pair_len != 0 {
+            return None;
+        }
+        let count_separators = min(self.count, virtual_count);
         Some(target_length - self.separator.len() * count_separators)
     }
 }
@@ -382,52 +391,52 @@ mod tests {
 
 
         #[rstest]
-        #[case(0, 0)]
-        #[case(1, 1)]
-        #[case(2, 2)]
-        #[case(3, 2)]
-        #[case(10, 9)]
+        #[case(0, None)]
+        #[case(1, Some(1))]
+        #[case(2, None)]
+        #[case(3, Some(2))]
+        #[case(10, Some(9))]
         fn one_dash_space_test(
             #[from(one_dash)] separator: FixCountSeparator,
             #[case] input: usize,
-            #[case] output: usize,
+            #[case] output: Option<usize>,
         ) {
-            let result = separator.try_compute_free_space(input).unwrap();
+            let result = separator.try_compute_free_space(input);
             assert_eq!(result, output);
         }
 
         #[rstest]
-        #[case(0, 0)]
-        #[case(1, 1)]
-        #[case(2, 2)]
-        #[case(5, 5)]
-        #[case(6, 2)]
-        #[case(10, 6)]
+        #[case(0, None)]
+        #[case(1, Some(1))]
+        #[case(2, None)]
+        #[case(5, None)]
+        #[case(6, Some(2))]
+        #[case(10, Some(6))]
         fn one_long_space_test(
             #[from(one_long)] separator: FixCountSeparator,
             #[case] input: usize,
-            #[case] output: usize,
+            #[case] output: Option<usize>,
         ) {
-            let result = separator.try_compute_free_space(input).unwrap();
+            let result = separator.try_compute_free_space(input);
             assert_eq!(result, output);
         }
 
         #[rstest]
-        #[case(0, 0)]
-        #[case(1, 1)]
-        #[case(2, 2)]
-        #[case(4, 4)]
-        #[case(5, 2)]
-        // #[case(6, 3)]
-        // #[case(7, 4)]
-        // #[case(8, 5)]
-        #[case(9, 3)]
+        #[case(0, None)]
+        #[case(1, Some(1))]
+        #[case(2, None)]
+        #[case(4, None)]
+        #[case(5, Some(2))]
+        #[case(6, None)]
+        #[case(7, None)]
+        #[case(8, None)]
+        #[case(9, Some(3))]
         fn multi_long_space_test(
             #[from(multi_long)] separator: FixCountSeparator,
             #[case] input: usize,
-            #[case] output: usize,
+            #[case] output: Option<usize>,
         ) {
-            let result = separator.try_compute_free_space(input).unwrap();
+            let result = separator.try_compute_free_space(input);
             assert_eq!(result, output);
         }
     }
