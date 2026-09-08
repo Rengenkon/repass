@@ -110,6 +110,7 @@ impl Separator for FixIntervalSeparator<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::separator::get_summary_length;
     use rstest::{fixture, rstest};
 
     #[fixture]
@@ -240,6 +241,81 @@ mod tests {
         #[case] output: &str,
     ) {
         let result = separator.separate(&input);
+        assert_eq!(result, output);
+    }
+
+    #[rstest]
+    #[case(vec!["1",])]
+    #[case(vec!["biba",])]
+    #[case(vec!["1", "2",])]
+    #[case(vec!["1", "2", "3",])]
+    #[case(vec!["1", "2", "3", "4",])]
+    #[case(vec!["biba", "boba",])]
+    fn space_test(
+        #[values(one_dash(), one_long(), multi_long())] separator: FixIntervalSeparator,
+        #[case] input: Vec<&str>,
+    ) {
+        let stat_len = get_summary_length(&input);
+        let compute_len = separator.length_after_separate(&input);
+        let spaces = separator.try_compute_free_space(compute_len).unwrap();
+        assert_eq!(stat_len, spaces);
+    }
+
+    #[rstest]
+    #[case(0, None)]
+    #[case(1, Some(1))]
+    #[case(2, None)]
+    #[case(3, Some(2))]
+    #[case(4, None)]
+    #[case(5, Some(3))]
+    fn one_dash_space_test(
+        #[from(one_dash)] separator: FixIntervalSeparator,
+        #[case] input: usize,
+        #[case] output: Option<usize>,
+    ) {
+        let result = separator.try_compute_free_space(input);
+        assert_eq!(result, output);
+    }
+
+    #[rstest]
+    #[case(0, None)]
+    #[case(1, Some(1))]
+    #[case(2, None)]
+    #[case(3, None)]
+    #[case(4, None)]
+    #[case(5, None)]
+    #[case(6, Some(2))]
+    #[case(7, None)]
+    #[case(8, None)]
+    #[case(11, Some(3))]
+    fn one_long_space_test(
+        #[from(one_long)] separator: FixIntervalSeparator,
+        #[case] input: usize,
+        #[case] output: Option<usize>,
+    ) {
+        let result = separator.try_compute_free_space(input);
+        assert_eq!(result, output);
+    }
+
+    #[rstest]
+    #[case(0, None)]
+    #[case(1, Some(1))]
+    #[case(2, Some(2))]
+    #[case(3, Some(3))]
+    #[case(4, None)]
+    #[case(5, None)]
+    #[case(6, None)]
+    #[case(7, None)]
+    #[case(8, Some(4))]
+    #[case(9, Some(5))]
+    #[case(10, Some(6))]
+    #[case(11, None)]
+    fn multi_long_space_test(
+        #[from(multi_long)] separator: FixIntervalSeparator,
+        #[case] input: usize,
+        #[case] output: Option<usize>,
+    ) {
+        let result = separator.try_compute_free_space(input);
         assert_eq!(result, output);
     }
 }
