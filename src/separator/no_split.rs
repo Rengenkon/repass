@@ -1,10 +1,16 @@
-use super::{IllegalArgumentError, SeparatorStrategy, SeparatorInternal};
+use super::{IllegalArgumentError, Separator, SeparatorInternal};
 
 #[derive(Debug)]
 pub struct WithoutSeparator {}
 
 impl WithoutSeparator {
     pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Default for WithoutSeparator {
+    fn default() -> Self {
         Self {}
     }
 }
@@ -30,10 +36,14 @@ impl SeparatorInternal for WithoutSeparator {
     }
 }
 
-impl SeparatorStrategy for WithoutSeparator {}
+impl Separator for WithoutSeparator {
+    fn try_compute_free_space(self: &Self, target_length: usize) -> Option<usize> {
+        Some(target_length)
+    }
+}
 
 mod tests {
-    use super::{WithoutSeparator, SeparatorStrategy};
+    use super::{Separator, WithoutSeparator};
     use rstest::{fixture, rstest};
 
     #[rstest]
@@ -62,10 +72,7 @@ mod tests {
     #[case(vec![""])]
     #[case(vec!["", "",])]
     #[should_panic]
-    fn panic_test(
-        #[values(separator())] separator: WithoutSeparator,
-        #[case] input: Vec<&str>,
-    ) {
+    fn panic_test(#[values(separator())] separator: WithoutSeparator, #[case] input: Vec<&str>) {
         separator.separate(&input);
     }
 
