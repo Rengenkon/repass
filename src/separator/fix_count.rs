@@ -1,4 +1,4 @@
-use super::{IllegalArgumentError, SeparatorInternal, SeparatorStrategy};
+use super::{IllegalArgumentError, Separator, SeparatorInternal, DEFAULT_SEPARATOR};
 use std::cmp::{Ordering, max, min};
 
 #[derive(Debug, PartialEq)]
@@ -13,6 +13,90 @@ struct MetaInf {
     parts_count: usize,
     chars_in_part: usize,
     chars_out_part: usize,
+}
+
+fn separator_indexes(meta: &MetaInf) -> Vec<usize> {
+    let parts_size = parts_sizes(meta);
+    part_sizes_to_separators_indexes(0, &parts_size[0..meta.separates_count])
+}
+
+fn align_parts_size(
+    capacity: usize,
+    out_part: usize,
+    in_part: usize,
+    align: Align,
+) -> Vec<usize> {
+    let mut sizes = Vec::with_capacity(capacity);
+    for part in 0..capacity {
+        if (align == Align::Left && part < out_part)
+            || (align == Align::Right && part >= capacity - out_part)
+        {
+            sizes.push(in_part + 1);
+        } else {
+            sizes.push(in_part);
+        }
+    }
+    sizes
+}
+
+fn half_parts_sizes(meta: &MetaInf, align: Align) -> Vec<usize> {
+    if meta.parts_count == 1 || meta.chars_out_part == 1 {
+        return Vec::new();
+    }
+    let half_chars_out_part = meta.chars_out_part / 2;
+    let capacity = if meta.chars_in_part == 0 {
+        half_chars_out_part
+    } else {
+        meta.parts_count / 2
+    };
+    align_parts_size(capacity, half_chars_out_part, meta.chars_in_part, align)
+}
+
+fn middle_parts_sizes(meta: &MetaInf) -> Vec<usize> {
+    let mut count = meta.chars_out_part % 2;
+    if meta.parts_count % 2 == 1 {
+        count += meta.chars_in_part;
+    }
+    if count == 0 {
+        return Vec::new();
+    }
+    vec![count]
+}
+
+fn parts_sizes(meta: &MetaInf) -> Vec<usize> {
+    if meta.chars_out_part % 2 == 1 && meta.parts_count % 2 == 0 {
+        align_parts_size(
+            meta.parts_count,
+            meta.chars_out_part,
+            meta.chars_in_part,
+            Align::Left,
+        )
+    } else {
+        // todo invert if user want it
+        let left_align = Align::Left;
+        let right_align = Align::Right;
+
+        let lmr_sizes = [
+            half_parts_sizes(meta, left_align),
+            middle_parts_sizes(meta),
+            half_parts_sizes(meta, right_align),
+        ];
+        let mut result = Vec::new();
+        lmr_sizes
+            .iter()
+            .for_each(|sizes| result.extend_from_slice(sizes));
+        result
+    }
+}
+
+fn part_sizes_to_separators_indexes(offset: usize, sizes: &[usize]) -> Vec<usize> {
+    let mut result = Vec::with_capacity(sizes.len());
+    let mut value: isize = offset as isize - 1;
+    for size in sizes {
+        value += *size as isize + 1;
+        result.push(value as usize);
+    }
+    result
 }
 
 /// Separate parts with setuped count of separator segments.
@@ -54,90 +138,6 @@ impl<'a> FixCountSeparator<'a> {
             chars_in_part: in_part,
             chars_out_part: out_part,
         }
-    }
-
-    fn align_parts_size(
-        capacity: usize,
-        out_part: usize,
-        in_part: usize,
-        align: Align,
-    ) -> Vec<usize> {
-        let mut sizes = Vec::with_capacity(capacity);
-        for part in 0..capacity {
-            if (align == Align::Left && part < out_part)
-                || (align == Align::Right && part >= capacity - out_part)
-            {
-                sizes.push(in_part + 1);
-            } else {
-                sizes.push(in_part);
-            }
-        }
-        sizes
-    }
-
-    fn half_parts_sizes(meta: &MetaInf, align: Align) -> Vec<usize> {
-        if meta.parts_count == 1 || meta.chars_out_part == 1 {
-            return Vec::new();
-        }
-        let half_chars_out_part = meta.chars_out_part / 2;
-        let capacity = if meta.chars_in_part == 0 {
-            half_chars_out_part
-        } else {
-            meta.parts_count / 2
-        };
-        Self::align_parts_size(capacity, half_chars_out_part, meta.chars_in_part, align)
-    }
-
-    fn middle_parts_sizes(meta: &MetaInf) -> Vec<usize> {
-        let mut count = meta.chars_out_part % 2;
-        if meta.parts_count % 2 == 1 {
-            count += meta.chars_in_part;
-        }
-        if count == 0 {
-            return Vec::new();
-        }
-        vec![count]
-    }
-
-    fn parts_sizes(meta: &MetaInf) -> Vec<usize> {
-        if meta.chars_out_part % 2 == 1 && meta.parts_count % 2 == 0 {
-            Self::align_parts_size(
-                meta.parts_count,
-                meta.chars_out_part,
-                meta.chars_in_part,
-                Align::Left,
-            )
-        } else {
-            // todo invert if user want it
-            let left_align = Align::Left;
-            let right_align = Align::Right;
-
-            let lmr_sizes = [
-                Self::half_parts_sizes(meta, left_align),
-                Self::middle_parts_sizes(meta),
-                Self::half_parts_sizes(meta, right_align),
-            ];
-            let mut result = Vec::new();
-            lmr_sizes
-                .iter()
-                .for_each(|sizes| result.extend_from_slice(sizes));
-            result
-        }
-    }
-
-    fn part_sizes_to_separators_indexes(offset: usize, sizes: &[usize]) -> Vec<usize> {
-        let mut result = Vec::with_capacity(sizes.len());
-        let mut value: isize = offset as isize - 1;
-        for size in sizes {
-            value += *size as isize + 1;
-            result.push(value as usize);
-        }
-        result
-    }
-
-    fn separator_indexes(self: &Self, meta: &MetaInf) -> Vec<usize> {
-        let parts_size = Self::parts_sizes(meta);
-        Self::part_sizes_to_separators_indexes(0, &parts_size[0..meta.separates_count])
     }
 
     fn generic_assemble<'b>(self: &Self, separate_indexes: &[usize], raw_parts: &[&str]) -> String {
@@ -194,10 +194,19 @@ impl<'a> FixCountSeparator<'a> {
     }
 }
 
+impl<'a> Default for FixCountSeparator<'a> {
+    fn default() -> Self {
+        Self {
+            separator: DEFAULT_SEPARATOR,
+            count: 3
+        }
+    }
+}
+
 impl SeparatorInternal for FixCountSeparator<'_> {
     fn add_separator(self: &Self, parts: &[&str]) -> String {
         let meta = self.get_meta_inf(parts);
-        let separator_indexes = self.separator_indexes(&meta);
+        let separator_indexes = separator_indexes(&meta);
         self.generic_assemble(&separator_indexes, parts)
     }
 
@@ -224,13 +233,19 @@ impl SeparatorInternal for FixCountSeparator<'_> {
     }
 }
 
-impl SeparatorStrategy for FixCountSeparator<'_> {}
+impl Separator for FixCountSeparator<'_> {
+    fn try_compute_free_space(self: &Self, target_length: usize) -> Option<usize> {
+        let count_separators = min(self.count, (target_length + 1) / (self.separator.len() + 1) - 1);
+        Some(target_length - self.separator.len() * count_separators)
+    }
+}
 
 #[cfg(test)]
 mod tests {
     mod public_functional {
-        use super::super::{FixCountSeparator, SeparatorStrategy};
+        use super::super::{FixCountSeparator, Separator};
         use rstest::{fixture, rstest};
+        use crate::separator::get_summary_length;
 
         #[fixture]
         fn without_separator<'a>() -> FixCountSeparator<'a> {
@@ -266,10 +281,7 @@ mod tests {
         #[case(vec!["biba", "boba",])]
         #[should_panic]
         fn invalid_separator_panic_test(
-            #[values(
-                without_separator(),
-                without_count(),
-            )] separator: FixCountSeparator,
+            #[values(without_separator(), without_count())] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
         ) {
             separator.separate(&input);
@@ -281,11 +293,7 @@ mod tests {
         #[case(vec!["", "",])]
         #[should_panic]
         fn invalid_data_panic_test(
-            #[values(
-                one_dash(),
-                one_long(),
-                multi_long(),
-            )] separator: FixCountSeparator,
+            #[values(one_dash(), one_long(), multi_long())] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
         ) {
             separator.separate(&input);
@@ -299,11 +307,7 @@ mod tests {
         #[case(vec!["1", "2", "3", "4",])]
         #[case(vec!["biba", "boba",])]
         fn length_test(
-            #[values(
-                one_dash(),
-                one_long(),
-                multi_long(),
-            )] separator: FixCountSeparator,
+            #[values(one_dash(), one_long(), multi_long())] separator: FixCountSeparator,
             #[case] input: Vec<&str>,
         ) {
             let result_len = separator.separate(&input).len();
@@ -358,18 +362,86 @@ mod tests {
             let result = separator.separate(&input);
             assert_eq!(result, output);
         }
+
+        #[rstest]
+        #[case(vec!["1",])]
+        #[case(vec!["biba",])]
+        #[case(vec!["1", "2",])]
+        #[case(vec!["1", "2", "3",])]
+        #[case(vec!["1", "2", "3", "4",])]
+        #[case(vec!["biba", "boba",])]
+        fn space_test(
+            #[values(one_dash(), one_long(), multi_long())] separator: FixCountSeparator,
+            #[case] input: Vec<&str>,
+        ) {
+            let stat_len = get_summary_length(&input);
+            let compute_len = separator.length_after_separate(&input);
+            let spaces = separator.try_compute_free_space(compute_len).unwrap();
+            assert_eq!(stat_len, spaces);
+        }
+
+
+        #[rstest]
+        #[case(0, 0)]
+        #[case(1, 1)]
+        #[case(2, 2)]
+        #[case(3, 2)]
+        #[case(10, 9)]
+        fn one_dash_space_test(
+            #[from(one_dash)] separator: FixCountSeparator,
+            #[case] input: usize,
+            #[case] output: usize,
+        ) {
+            let result = separator.try_compute_free_space(input).unwrap();
+            assert_eq!(result, output);
+        }
+
+        #[rstest]
+        #[case(0, 0)]
+        #[case(1, 1)]
+        #[case(2, 2)]
+        #[case(5, 5)]
+        #[case(6, 2)]
+        #[case(10, 6)]
+        fn one_long_space_test(
+            #[from(one_long)] separator: FixCountSeparator,
+            #[case] input: usize,
+            #[case] output: usize,
+        ) {
+            let result = separator.try_compute_free_space(input).unwrap();
+            assert_eq!(result, output);
+        }
+
+        #[rstest]
+        #[case(0, 0)]
+        #[case(1, 1)]
+        #[case(2, 2)]
+        #[case(4, 4)]
+        #[case(5, 2)]
+        // #[case(6, 3)]
+        // #[case(7, 4)]
+        // #[case(8, 5)]
+        #[case(9, 3)]
+        fn multi_long_space_test(
+            #[from(multi_long)] separator: FixCountSeparator,
+            #[case] input: usize,
+            #[case] output: usize,
+        ) {
+            let result = separator.try_compute_free_space(input).unwrap();
+            assert_eq!(result, output);
+        }
     }
 
     /// using for debug
     mod internal {
-        use super::super::FixCountSeparator;
+        use super::super::*;
 
         #[test]
         fn len_3() {
             let s = FixCountSeparator::new("-", 1);
-            let data = vec!["1", "2", "3",];
+            let data = vec!["1", "2", "3"];
             let m = s.get_meta_inf(&data);
-            let ind = s.separator_indexes(&m);
+            let ind = separator_indexes(&m);
             assert_eq!(ind, vec![2])
         }
     }
