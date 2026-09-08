@@ -33,4 +33,16 @@ impl<'a> Query<'a> {
             separator,
         }
     }
+    
+    pub fn length(&self) -> &Length {
+        &self.length
+    }
+
+    pub fn dictionary(&self) -> &Box<&'a dyn Dictionary> {
+        &self.dictionary
+    }
+
+    pub fn separator(&self) -> &Box<&'a dyn Separator> {
+        &self.separator
+    }
 }

@@ -60,17 +60,17 @@ fn generate(
 }
 
 pub fn generate_once(query: &Query) -> String {
-    let target_length = query.length.to_one_size();
-    let space = query.separator.try_compute_free_space(target_length);
-    generate(&query.dictionary, &query.separator, space, target_length)
+    let target_length = query.length().to_one_size();
+    let space = query.separator().try_compute_free_space(target_length);
+    generate(query.dictionary(), query.separator(), space, target_length)
 }
 
 pub fn generate_multi(query: &Query, count: usize) -> Vec<String> {
-    let target_length = query.length.to_one_size();
-    let space = query.separator.try_compute_free_space(target_length);
+    let target_length = query.length().to_one_size();
+    let space = query.separator().try_compute_free_space(target_length);
     let mut result = Vec::new();
     for _ in 0..count {
-        let generate = generate(&query.dictionary, &query.separator, space, target_length);
+        let generate = generate(query.dictionary(), query.separator(), space, target_length);
         result.push(generate);
     }
     result
