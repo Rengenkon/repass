@@ -19,31 +19,22 @@ enum Data {
 }
 
 #[derive(Hash, Eq, PartialEq)]
-struct Tag {
-    name: String,
+struct Tag<'a> {
+    name: &'a str,
 }
 
-impl Tag {
-    fn new(name: &str) -> Self {
-        Self {
-            name: String::from_str(name).unwrap(),
-        }
+impl<'a> Tag<'a> {
+    fn new(name: &'a str) -> Self {
+        Self { name }
     }
 
-    pub fn rename(self: &mut Self, new_name: &str) {
-        self.name.clear();
-        self.name.push_str(new_name);
-    }
-}
-
-impl Borrow<str> for Tag {
-    fn borrow(&self) -> &str {
-        &self.name
+    fn rename(self: &mut Self, new_name: &'a str) {
+        self.name = new_name;
     }
 }
 
 struct Tags<'a> {
-    tags: HashMap<&'a str, Tag>,
+    tags: HashMap<&'a str, Tag<'a>>,
 }
 
 impl<'a> Tags<'a> {
@@ -54,32 +45,23 @@ impl<'a> Tags<'a> {
     }
 
     pub fn add(self: &mut Self, name: &'a str) -> &Tag {
-        if !self.tags.contains_key(name) {
-            let tag = Tag::new(name);
-            self.tags.insert(name, tag);
-        }
-        self.tags.get(name).unwrap()
+        self.tags.entry(name).or_insert_with(|| Tag::new(name))
     }
 
-    pub fn rename(self: &mut Self, name: &str, new_name: &'a str) -> Result<&Tag, ()> {
+    pub fn get(self: &Self, name: &str) -> Option<&Tag> {
+        self.tags.get(name)
+    }
+
+    pub fn rename(self: &mut Self, name: &str, new_name: &'a str) -> Result<&Tag<'a>, ()> {
         if self.tags.contains_key(new_name) {
             return Err(());
         }
-        if !self.tags.contains_key(name) {
+        let Some(mut tag) = self.tags.remove(name) else {
             return Err(());
-        }
-        let mut tag = self.tags.remove(name).unwrap();
+        };
         tag.rename(new_name);
-        self.tags.insert(new_name, tag);
-        Ok(self.tags.get(new_name).unwrap())
+        Ok(self.tags.entry(new_name).or_insert(tag))
     }
-
-    // pub fn get_mut(self: &mut Self, name: &str) -> Option<&mut Tag> {
-    //     if !self.tags.contains_key(name) {
-    //         return None
-    //     }
-    //     self.tags.get_mut(name)
-    // }
 }
 
 struct Record<'a> {
@@ -87,7 +69,7 @@ struct Record<'a> {
     login: String,
     host: Option<Host>,
     data: Vec<Data>,
-    tags: Vec<&'a Tag>,
+    tags: Vec<&'a Tag<'a>>,
     created: Instant,
     updated: Instant,
 }
