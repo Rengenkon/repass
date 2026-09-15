@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::time::Instant;
@@ -42,28 +42,44 @@ impl Borrow<str> for Tag {
     }
 }
 
-struct Tags {
-    tags: HashSet<Tag>,
+struct Tags<'a> {
+    tags: HashMap<&'a str, Tag>,
 }
 
-impl Tags {
+impl<'a> Tags<'a> {
     pub fn new() -> Self {
         Self {
-            tags: HashSet::new(),
+            tags: HashMap::new(),
         }
     }
 
-    pub fn add(self: &mut Self, name: &str) -> &Tag {
-        if !self.tags.contains(name) {
+    pub fn add(self: &mut Self, name: &'a str) -> &Tag {
+        if !self.tags.contains_key(name) {
             let tag = Tag::new(name);
-            self.tags.insert(tag);
+            self.tags.insert(name, tag);
         }
         self.tags.get(name).unwrap()
     }
 
-    pub fn get_mut(self: Self, name: &str) -> &mut Tag {
-       todo!()
+    pub fn rename(self: &mut Self, name: &str, new_name: &'a str) -> Result<&Tag, ()> {
+        if self.tags.contains_key(new_name) {
+            return Err(());
+        }
+        if !self.tags.contains_key(name) {
+            return Err(());
+        }
+        let mut tag = self.tags.remove(name).unwrap();
+        tag.rename(new_name);
+        self.tags.insert(new_name, tag);
+        Ok(self.tags.get(new_name).unwrap())
     }
+
+    // pub fn get_mut(self: &mut Self, name: &str) -> Option<&mut Tag> {
+    //     if !self.tags.contains_key(name) {
+    //         return None
+    //     }
+    //     self.tags.get_mut(name)
+    // }
 }
 
 struct Record<'a> {
