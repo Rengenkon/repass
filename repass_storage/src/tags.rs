@@ -1,4 +1,3 @@
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 pub type TagId = u16;
@@ -58,6 +57,21 @@ impl<'a> Tags<'a> {
             .next_id(|id| self.tags_ids.contains_key(&id))
     }
 
+    fn conflict_name(self: &Self, name: &'a str) -> Result<(), ()> {
+        if let Some(conflict_id) = self.tags_names.get(name) {
+            let conflict = self.tags_ids.get(conflict_id).unwrap();
+            return Err(());
+        }
+        Ok(())
+    }
+
+    fn create_tag(self: &mut Self, id: TagId, name: &'a str) -> &Tag<'_> {
+        let tag = Tag::new(id, name);
+        self.tags_names.insert(name, id);
+        self.tags_ids.insert(id, tag);
+        self.get(id).unwrap()
+    }
+
     pub fn new(ins: HashSet<Tag<'a>>) -> Self {
         let mut tags_names = HashMap::new();
         let mut tags_ids = HashMap::new();
@@ -72,110 +86,46 @@ impl<'a> Tags<'a> {
         Self {
             tags_ids,
             tags_names,
-            next_id: max + 1,
+            id_creator: IdCreator::default(),
         }
     }
 
-    pub fn create(self: &mut Self, name: &'a str) -> Result<TagId, ()> {
-        match self.tags_names.entry(name) {
-            Entry::Occupied(_) => Err(()),
-            Entry::Vacant(e) => {
-                let id = self.next_id();
-                let tag = Tag::new(id, name);
-                e.insert(id);
-                self.tags_ids.insert(id, tag);
-                Ok(id)
-            }
-        }
+    pub fn create(self: &mut Self, name: &'a str) -> Result<&Tag<'_>, ()> {
+        self.conflict_name(name)?;
+        let id = self.next_id();
+        Ok(self.create_tag(id, name))
     }
 
-    pub fn create_with_id(self: &mut Self, name: &'a str, id: TagId) -> Result<TagId, ()> {
-        match self.tags_ids.entry(id) {
-            Entry::Occupied(_) => Err(()),
-            Entry::Vacant(e_id) => match self.tags_names.entry(name) {
-                Entry::Occupied(_) => Err(()),
-                Entry::Vacant(e_name) => {
-                    let tag = Tag::new(id, name);
-                    e_name.insert(id);
-                    e_id.insert(tag);
-                    Ok(id)
-                }
-            },
+    pub fn create_with_id(self: &mut Self, id: TagId, name: &'a str) -> Result<&Tag<'_>, ()> {
+        self.conflict_name(name)?;
+        if let Some(conflict) = self.tags_ids.get(&id) {
+            return Err(());
         }
+        Ok(self.create_tag(id, name))
     }
 
     pub fn get(self: &Self, id: TagId) -> Option<&Tag<'_>> {
         self.tags_ids.get(&id)
     }
 
-    pub fn get_or_create(self: &mut Self, name: &'a str) -> &Tag<'_> {
-        match self.tags_names.entry(name) {
-            Entry::Occupied(e) => e.into_mut(),
-            Entry::Vacant(e) => {
-                let tag = Tag::new(self.next_id, name);
-                self.next_id += 1;
-                e.insert(tag)
-            }
-        }
-    }
-
-    pub fn rename(self: &mut Self, name: &str, new_name: &'a str) -> Result<&Tag<'_>, ()> {
-        if name == new_name {
-            return self.tags_names.get(name).ok_or(());
-        }
-        if self.tags_names.contains_key(new_name) {
+    pub fn rename(self: &mut Self, id: TagId, new_name: &'a str) -> Result<&Tag<'_>, ()> {
+        self.conflict_name(new_name)?;
+        let tag = self.tags_ids.get_mut(&id);
+        if tag.is_none() {
             return Err(());
         }
-        let Some(mut tag) = self.tags_names.remove(name) else {
-            return Err(());
-        };
+        let tag = tag.unwrap();
         tag.rename(new_name);
-        Ok(self.tags_names.entry(new_name).or_insert(tag))
-    }
-
-    pub fn minimize(self: &Self) -> Minimize<'_> {
-        let mut mapping = HashMap::new();
-        let mut tags = HashMap::new();
-        let mut index = 0;
-        self.tags_names.iter().for_each(|(_, tag)| {
-            mapping.insert(tag.id, index);
-            let new_tag = Tag::new(index, tag.name);
-            tags.insert(tag.name, new_tag);
-            index += 1;
-        });
-        let tags = Tags {
-            tags_names: tags,
-            next_id: index,
-        };
-        Minimize {
-            tags,
-            id_mapping: mapping,
-        }
+        Ok(tag)
     }
 }
 
 impl Default for Tags<'_> {
     fn default() -> Self {
         Self {
+            tags_ids: HashMap::new(),
             tags_names: HashMap::new(),
-            next_id: 0,
+            id_creator: IdCreator::default(),
         }
-    }
-}
-
-pub struct Minimize<'a> {
-    tags: Tags<'a>,
-    id_mapping: HashMap<TagId, TagId>,
-}
-
-impl<'a> Minimize<'a> {
-    pub fn tags(self: Self) -> Tags<'a> {
-        self.tags
-    }
-
-    pub fn convert(self: &Self, tags: &[TagId]) -> Vec<TagId> {
-        tags.iter()
-            .map(|tag| *self.id_mapping.get(tag).unwrap())
-            .collect()
     }
 }
