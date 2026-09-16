@@ -1,5 +1,5 @@
-use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 
 pub type TagId = u16;
 
@@ -27,41 +27,89 @@ impl<'a> Tag<'a> {
     }
 }
 
+struct IdCreator {
+    sequence_id: TagId,
+}
+
+impl IdCreator {
+    pub fn next_id(self: &mut Self, predicate: impl Fn(TagId) -> bool) -> TagId {
+        while predicate(self.sequence_id) {
+            self.sequence_id += 1;
+        }
+        self.sequence_id
+    }
+}
+
+impl Default for IdCreator {
+    fn default() -> Self {
+        Self { sequence_id: 0 }
+    }
+}
+
 pub struct Tags<'a> {
-    tags: HashMap<&'a str, Tag<'a>>,
-    next_id: TagId,
+    tags_ids: HashMap<TagId, Tag<'a>>,
+    tags_names: HashMap<&'a str, TagId>,
+    id_creator: IdCreator,
 }
 
 impl<'a> Tags<'a> {
+    fn next_id(self: &mut Self) -> TagId {
+        self.id_creator
+            .next_id(|id| self.tags_ids.contains_key(&id))
+    }
+
     pub fn new(ins: HashSet<Tag<'a>>) -> Self {
-        let mut tags = HashMap::new();
+        let mut tags_names = HashMap::new();
+        let mut tags_ids = HashMap::new();
         let mut max = 0;
         ins.into_iter().for_each(|tag| {
             if tag.id > max {
                 max = tag.id;
             }
-            tags.insert(tag.name, tag);
+            tags_names.insert(tag.name, tag.id);
+            tags_ids.insert(tag.id, tag);
         });
-        Self { tags, next_id: max + 1 }
+        Self {
+            tags_ids,
+            tags_names,
+            next_id: max + 1,
+        }
     }
 
-    pub fn create(self: &mut Self, name: &'a str) -> Result<&Tag<'_>, ()> {
-        match self.tags.entry(name) {
+    pub fn create(self: &mut Self, name: &'a str) -> Result<TagId, ()> {
+        match self.tags_names.entry(name) {
             Entry::Occupied(_) => Err(()),
             Entry::Vacant(e) => {
-                let tag = Tag::new(self.next_id, name);
-                self.next_id += 1;
-                Ok(e.insert(tag))
+                let id = self.next_id();
+                let tag = Tag::new(id, name);
+                e.insert(id);
+                self.tags_ids.insert(id, tag);
+                Ok(id)
             }
         }
     }
 
-    pub fn get(self: &Self, name: &str) -> Option<&Tag<'_>> {
-        self.tags.get(name)
+    pub fn create_with_id(self: &mut Self, name: &'a str, id: TagId) -> Result<TagId, ()> {
+        match self.tags_ids.entry(id) {
+            Entry::Occupied(_) => Err(()),
+            Entry::Vacant(e_id) => match self.tags_names.entry(name) {
+                Entry::Occupied(_) => Err(()),
+                Entry::Vacant(e_name) => {
+                    let tag = Tag::new(id, name);
+                    e_name.insert(id);
+                    e_id.insert(tag);
+                    Ok(id)
+                }
+            },
+        }
+    }
+
+    pub fn get(self: &Self, id: TagId) -> Option<&Tag<'_>> {
+        self.tags_ids.get(&id)
     }
 
     pub fn get_or_create(self: &mut Self, name: &'a str) -> &Tag<'_> {
-        match self.tags.entry(name) {
+        match self.tags_names.entry(name) {
             Entry::Occupied(e) => e.into_mut(),
             Entry::Vacant(e) => {
                 let tag = Tag::new(self.next_id, name);
@@ -73,30 +121,30 @@ impl<'a> Tags<'a> {
 
     pub fn rename(self: &mut Self, name: &str, new_name: &'a str) -> Result<&Tag<'_>, ()> {
         if name == new_name {
-            return self.tags.get(name).ok_or(());
+            return self.tags_names.get(name).ok_or(());
         }
-        if self.tags.contains_key(new_name) {
+        if self.tags_names.contains_key(new_name) {
             return Err(());
         }
-        let Some(mut tag) = self.tags.remove(name) else {
+        let Some(mut tag) = self.tags_names.remove(name) else {
             return Err(());
         };
         tag.rename(new_name);
-        Ok(self.tags.entry(new_name).or_insert(tag))
+        Ok(self.tags_names.entry(new_name).or_insert(tag))
     }
 
     pub fn minimize(self: &Self) -> Minimize<'_> {
         let mut mapping = HashMap::new();
         let mut tags = HashMap::new();
         let mut index = 0;
-        self.tags.iter().for_each(|(_, tag)| {
+        self.tags_names.iter().for_each(|(_, tag)| {
             mapping.insert(tag.id, index);
             let new_tag = Tag::new(index, tag.name);
             tags.insert(tag.name, new_tag);
             index += 1;
         });
         let tags = Tags {
-            tags,
+            tags_names: tags,
             next_id: index,
         };
         Minimize {
@@ -109,7 +157,7 @@ impl<'a> Tags<'a> {
 impl Default for Tags<'_> {
     fn default() -> Self {
         Self {
-            tags: HashMap::new(),
+            tags_names: HashMap::new(),
             next_id: 0,
         }
     }
