@@ -1,8 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub type TagId = u16;
 
-#[derive(Hash)]
 pub struct Tag<'a> {
     id: TagId,
     name: &'a str,
@@ -26,11 +25,11 @@ impl<'a> Tag<'a> {
     }
 }
 
-struct IdCreator {
+struct IdGenerator {
     sequence_id: TagId,
 }
 
-impl IdCreator {
+impl IdGenerator {
     pub fn next_id(self: &mut Self, predicate: impl Fn(TagId) -> bool) -> TagId {
         while predicate(self.sequence_id) {
             self.sequence_id += 1;
@@ -39,7 +38,7 @@ impl IdCreator {
     }
 }
 
-impl Default for IdCreator {
+impl Default for IdGenerator {
     fn default() -> Self {
         Self { sequence_id: 0 }
     }
@@ -48,16 +47,16 @@ impl Default for IdCreator {
 pub struct Tags<'a> {
     tags_ids: HashMap<TagId, Tag<'a>>,
     tags_names: HashMap<&'a str, TagId>,
-    id_creator: IdCreator,
+    id_generator: IdGenerator,
 }
 
 impl<'a> Tags<'a> {
     fn next_id(self: &mut Self) -> TagId {
-        self.id_creator
+        self.id_generator
             .next_id(|id| self.tags_ids.contains_key(&id))
     }
 
-    fn conflict_name(self: &Self, name: &'a str) -> Result<(), ()> {
+    fn conflict_name(self: &Self, name: &str) -> Result<(), ()> {
         if let Some(conflict_id) = self.tags_names.get(name) {
             let conflict = self.tags_ids.get(conflict_id).unwrap();
             return Err(());
@@ -72,21 +71,18 @@ impl<'a> Tags<'a> {
         self.get(id).unwrap()
     }
 
-    pub fn new(ins: HashSet<Tag<'a>>) -> Self {
+    pub fn new(tags: impl IntoIterator<Item = Tag<'a>>) -> Self {
+        // todo не уникальные ид+имя
         let mut tags_names = HashMap::new();
         let mut tags_ids = HashMap::new();
-        let mut max = 0;
-        ins.into_iter().for_each(|tag| {
-            if tag.id > max {
-                max = tag.id;
-            }
+        tags.into_iter().for_each(|tag| {
             tags_names.insert(tag.name, tag.id);
             tags_ids.insert(tag.id, tag);
         });
         Self {
             tags_ids,
             tags_names,
-            id_creator: IdCreator::default(),
+            id_generator: IdGenerator::default(),
         }
     }
 
@@ -115,6 +111,8 @@ impl<'a> Tags<'a> {
             return Err(());
         }
         let tag = tag.unwrap();
+        self.tags_names.remove(tag.name);
+        self.tags_names.insert(new_name, id);
         tag.rename(new_name);
         Ok(tag)
     }
@@ -125,7 +123,7 @@ impl Default for Tags<'_> {
         Self {
             tags_ids: HashMap::new(),
             tags_names: HashMap::new(),
-            id_creator: IdCreator::default(),
+            id_generator: IdGenerator::default(),
         }
     }
 }
