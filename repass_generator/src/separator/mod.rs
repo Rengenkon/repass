@@ -10,26 +10,74 @@ pub static DEFAULT_SEPARATOR: &str = "-";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeparationShape {
     /// Total Unicode scalar count in dictionary entries, excluding separators.
-    pub content_length: usize,
+    content_length: usize,
     /// Number of dictionary entries that form the content.
-    pub part_count: usize,
+    part_count: usize,
+}
+
+impl SeparationShape {
+    pub fn new(content_length: usize, part_count: usize) -> Self {
+        Self {
+            content_length,
+            part_count,
+        }
+    }
+
+    pub fn content_length(&self) -> usize {
+        self.content_length
+    }
+
+    pub fn part_count(&self) -> usize {
+        self.part_count
+    }
 }
 
 /// Input dimensions used to calculate a separator's output without rendering it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputShape {
     /// Unicode scalar count in the content, excluding separators.
-    pub content_chars: usize,
+    content_chars: usize,
     /// Number of non-empty dictionary entries in the content.
-    pub groups: usize,
+    groups: usize,
+}
+
+impl InputShape {
+    pub fn new(content_chars: usize, groups: usize) -> Self {
+        Self {
+            content_chars,
+            groups,
+        }
+    }
+
+    pub fn content_chars(&self) -> usize {
+        self.content_chars
+    }
+
+    pub fn groups(&self) -> usize {
+        self.groups
+    }
 }
 
 /// Exact character counts for a particular separator layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Layout {
-    pub input: InputShape,
-    pub separator_chars: usize,
-    pub total_chars: usize,
+    input: InputShape,
+    separator_chars: usize,
+    total_chars: usize,
+}
+
+impl Layout {
+    pub fn input(&self) -> InputShape {
+        self.input
+    }
+
+    pub fn separator_chars(&self) -> usize {
+        self.separator_chars
+    }
+
+    pub fn total_chars(&self) -> usize {
+        self.total_chars
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,10 +182,9 @@ impl Iterator for ShapeIter {
             ShapeIterKind::FixedContent {
                 content_length,
                 part_count,
-            } => part_count.next().map(|part_count| SeparationShape {
-                content_length: *content_length,
-                part_count,
-            }),
+            } => part_count
+                .next()
+                .map(|part_count| SeparationShape::new(*content_length, part_count)),
             ShapeIterKind::BetweenParts {
                 target_length,
                 separator_length,
@@ -152,10 +199,7 @@ impl Iterator for ShapeIter {
                     let separator_chars = separator_length.checked_mul(part_count - 1)?;
                     let content_length = target_length.checked_sub(separator_chars)?;
                     if content_length > 0 {
-                        return Some(SeparationShape {
-                            content_length,
-                            part_count,
-                        });
+                        return Some(SeparationShape::new(content_length, part_count));
                     }
                 }
                 None
@@ -238,9 +282,9 @@ pub trait Separator {
 
     /// Calculates the complete layout for named input dimensions.
     fn layout_for(&self, input: InputShape) -> Result<Layout, SeparatorError> {
-        let total_chars = self.output_length(input.content_chars, input.groups)?;
+        let total_chars = self.output_length(input.content_chars(), input.groups())?;
         let separator_chars = total_chars
-            .checked_sub(input.content_chars)
+            .checked_sub(input.content_chars())
             .ok_or(SeparatorError::LengthOverflow)?;
         Ok(Layout {
             input,
@@ -267,21 +311,14 @@ mod requirement_tests {
     fn fixed_content_requirement_is_iterated_lazily() {
         let requirement = WithoutSeparator.requirement_for(3).unwrap();
         let shapes: Vec<_> = requirement.into_shapes().collect();
+        assert_eq!(shapes[0].content_length(), 3);
+        assert_eq!(shapes[0].part_count(), 1);
         assert_eq!(
             shapes,
             vec![
-                SeparationShape {
-                    content_length: 3,
-                    part_count: 1,
-                },
-                SeparationShape {
-                    content_length: 3,
-                    part_count: 2,
-                },
-                SeparationShape {
-                    content_length: 3,
-                    part_count: 3,
-                },
+                SeparationShape::new(3, 1),
+                SeparationShape::new(3, 2),
+                SeparationShape::new(3, 3),
             ]
         );
     }
@@ -291,20 +328,8 @@ mod requirement_tests {
         let separator = BetweenPartsSeparator::new("--");
         let requirement = separator.requirement_for(8).unwrap();
         let mut shapes = requirement.into_shapes();
-        assert_eq!(
-            shapes.next(),
-            Some(SeparationShape {
-                content_length: 8,
-                part_count: 1,
-            })
-        );
-        assert_eq!(
-            shapes.next(),
-            Some(SeparationShape {
-                content_length: 6,
-                part_count: 2,
-            })
-        );
+        assert_eq!(shapes.next(), Some(SeparationShape::new(8, 1)));
+        assert_eq!(shapes.next(), Some(SeparationShape::new(6, 2)));
     }
 
     #[test]
@@ -324,14 +349,11 @@ mod requirement_tests {
     #[test]
     fn layout_reports_content_separator_and_total_lengths() {
         let separator = BetweenPartsSeparator::new("🟠-");
-        let layout = separator
-            .layout_for(InputShape {
-                content_chars: 5,
-                groups: 3,
-            })
-            .unwrap();
-        assert_eq!(layout.separator_chars, 4);
-        assert_eq!(layout.total_chars, 9);
+        let layout = separator.layout_for(InputShape::new(5, 3)).unwrap();
+        assert_eq!(layout.input().content_chars(), 5);
+        assert_eq!(layout.input().groups(), 3);
+        assert_eq!(layout.separator_chars(), 4);
+        assert_eq!(layout.total_chars(), 9);
     }
 
     #[test]
@@ -341,19 +363,7 @@ mod requirement_tests {
             separator_length: 1,
         };
         let mut shapes = requirement.into_shapes();
-        assert_eq!(
-            shapes.next(),
-            Some(SeparationShape {
-                content_length: usize::MAX,
-                part_count: 1,
-            })
-        );
-        assert_eq!(
-            shapes.next(),
-            Some(SeparationShape {
-                content_length: usize::MAX - 1,
-                part_count: 2,
-            })
-        );
+        assert_eq!(shapes.next(), Some(SeparationShape::new(usize::MAX, 1)));
+        assert_eq!(shapes.next(), Some(SeparationShape::new(usize::MAX - 1, 2)));
     }
 }

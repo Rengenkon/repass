@@ -6,8 +6,25 @@ use crate::separator::Separator;
 /// Upper bounds for separator-shape enumeration and dictionary search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GenerationLimits {
-    pub max_shapes: usize,
-    pub max_planner_states: usize,
+    max_shapes: usize,
+    max_planner_states: usize,
+}
+
+impl GenerationLimits {
+    pub fn new(max_shapes: usize, max_planner_states: usize) -> Self {
+        Self {
+            max_shapes,
+            max_planner_states,
+        }
+    }
+
+    pub fn max_shapes(&self) -> usize {
+        self.max_shapes
+    }
+
+    pub fn max_planner_states(&self) -> usize {
+        self.max_planner_states
+    }
 }
 
 impl Default for GenerationLimits {

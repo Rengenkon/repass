@@ -30,14 +30,14 @@ fn generate_for_target(
         .map_err(GeneratorError::InvalidSeparator)?;
     let mut planner = planner::CombinationPlanner::new(dictionary, limits);
     let mut found_shape = false;
-    for shape_index in 0..=limits.max_shapes {
+    for shape_index in 0..=limits.max_shapes() {
         let Some(shape) = shapes.next() else {
             break;
         };
-        if shape_index == limits.max_shapes {
+        if shape_index == limits.max_shapes() {
             return Err(GeneratorError::SearchLimitExceeded {
                 target,
-                limit: limits.max_shapes,
+                limit: limits.max_shapes(),
             });
         }
         found_shape = true;

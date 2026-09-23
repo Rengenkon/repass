@@ -35,7 +35,7 @@ impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
             dictionary,
             failed: HashSet::new(),
             visited: 0,
-            max_states: limits.max_planner_states,
+            max_states: limits.max_planner_states(),
             lengths_gcd,
             min_length,
             max_length,
@@ -49,7 +49,7 @@ impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
         shape: SeparationShape,
         rng: &mut impl Rng,
     ) -> Result<Option<Vec<usize>>, GeneratorError> {
-        if shape.part_count == 0 || shape.content_length == 0 {
+        if shape.part_count() == 0 || shape.content_length() == 0 {
             return Ok(None);
         }
         let min_length = self.min_length;
@@ -57,31 +57,35 @@ impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
         if max_length == 0 {
             return Ok(None);
         }
-        let Some(min_required) = min_length.checked_mul(shape.part_count) else {
+        let Some(min_required) = min_length.checked_mul(shape.part_count()) else {
             return Ok(None);
         };
         let max_possible = max_length
-            .checked_mul(shape.part_count)
+            .checked_mul(shape.part_count())
             .unwrap_or(usize::MAX);
-        if shape.content_length < min_required || shape.content_length > max_possible {
+        if shape.content_length() < min_required || shape.content_length() > max_possible {
             return Ok(None);
         }
-        if self.lengths_gcd == 0 || shape.content_length % self.lengths_gcd != 0 {
-            return Ok(None);
-        }
-
-        if !self.can_complete(shape.content_length, shape.part_count, shape.content_length)? {
+        if self.lengths_gcd == 0 || shape.content_length() % self.lengths_gcd != 0 {
             return Ok(None);
         }
 
-        let mut remaining_length = shape.content_length;
-        let mut remaining_parts = shape.part_count;
+        if !self.can_complete(
+            shape.content_length(),
+            shape.part_count(),
+            shape.content_length(),
+        )? {
+            return Ok(None);
+        }
+
+        let mut remaining_length = shape.content_length();
+        let mut remaining_parts = shape.part_count();
         let mut result = Vec::new();
-        result
-            .try_reserve_exact(shape.part_count)
-            .map_err(|_| GeneratorError::ResourceLimit {
-                target: shape.content_length,
-            })?;
+        result.try_reserve_exact(shape.part_count()).map_err(|_| {
+            GeneratorError::ResourceLimit {
+                target: shape.content_length(),
+            }
+        })?;
         while remaining_parts > 0 {
             self.viable_lengths.clear();
             for &length in self.dictionary.available_lengths() {
@@ -91,7 +95,7 @@ impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
                 if self.can_complete(
                     remaining_length - length,
                     remaining_parts - 1,
-                    shape.content_length,
+                    shape.content_length(),
                 )? {
                     self.viable_lengths.push(length);
                 }
@@ -196,13 +200,7 @@ mod tests {
         let mut rng = rand::rng();
         let mut planner = CombinationPlanner::new(&dictionary, GenerationLimits::default());
         let plan = planner
-            .find_plan(
-                SeparationShape {
-                    content_length: 4,
-                    part_count: 3,
-                },
-                &mut rng,
-            )
+            .find_plan(SeparationShape::new(4, 3), &mut rng)
             .unwrap()
             .unwrap();
         assert_eq!(plan.len(), 3);
@@ -221,13 +219,7 @@ mod tests {
         let mut rng = rand::rng();
         assert!(
             CombinationPlanner::new(&dictionary, GenerationLimits::default())
-                .find_plan(
-                    SeparationShape {
-                        content_length: 5,
-                        part_count: 2,
-                    },
-                    &mut rng,
-                )
+                .find_plan(SeparationShape::new(5, 2), &mut rng,)
                 .unwrap()
                 .is_none()
         );

@@ -94,12 +94,11 @@ mod tests {
         let dictionary =
             DictionaryCache::new(FileDictionary::from_entries(["a", "b", "c"]).unwrap()).unwrap();
         let separator = WithoutSeparator;
-        let limits = GenerationLimits {
-            max_shapes: 100,
-            max_planner_states: 100,
-        };
+        let limits = GenerationLimits::new(100, 100);
         let query = Query::with_limits(Length::Exact(5), &dictionary, &separator, limits).unwrap();
         assert_eq!(query.limits(), limits);
+        assert_eq!(query.limits().max_shapes(), 100);
+        assert_eq!(query.limits().max_planner_states(), 100);
 
         let mut rng = StdRng::seed_from_u64(5);
         assert_eq!(
