@@ -6,7 +6,7 @@ use std::collections::HashMap;
 /// dictionary positions. Implementations must not mutate their contents through
 /// interior mutability after being moved into this cache.
 pub struct DictionaryCache<'a> {
-    dictionary: Box<dyn Dictionary + 'a>,
+    dictionary: Box<dyn Dictionary<'a> + 'a>,
     by_length: HashMap<usize, Vec<usize>>,
     available_lengths: Vec<usize>,
     min_length: usize,
@@ -15,7 +15,7 @@ pub struct DictionaryCache<'a> {
 impl<'a> DictionaryCache<'a> {
     pub fn new<D>(dictionary: D) -> Result<Self, GeneratorError>
     where
-        D: Dictionary + 'a,
+        D: Dictionary<'a> + 'a,
     {
         dictionary.validate()?;
         let mut by_length: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -67,7 +67,7 @@ impl<'a> DictionaryCache<'a> {
         self.min_length
     }
 
-    pub fn into_dictionary(self) -> Box<dyn Dictionary + 'a> {
+    pub fn into_dictionary(self) -> Box<dyn Dictionary<'a> + 'a> {
         self.dictionary
     }
 }
@@ -94,5 +94,19 @@ mod tests {
         let dictionary = FileDictionary::from_entries(["owned"]).unwrap();
         let cache = DictionaryCache::new(dictionary).unwrap();
         assert_eq!(cache.entry(0), Some("owned"));
+    }
+
+    #[test]
+    fn extracting_dictionary_drops_index_and_allows_mutation_before_rebuild() {
+        static SECOND: [&str; 1] = ["second"];
+
+        let dictionary = FileDictionary::from_entries(["first"]).unwrap();
+        let cache = DictionaryCache::new(dictionary).unwrap();
+        let mut dictionary = cache.into_dictionary();
+
+        dictionary.add(&SECOND).unwrap();
+        let rebuilt = DictionaryCache::new(dictionary).unwrap();
+        assert_eq!(rebuilt.entry(1), Some("second"));
+        assert_eq!(rebuilt.entries_with_length(6), &[1]);
     }
 }
