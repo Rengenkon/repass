@@ -1,0 +1,46 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "permissions": [
+    // Rust: сборка и проверки
+    {
+      "action": "shell",
+      "resource": "cargo check *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "cargo build *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "cargo test *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "cargo clippy *",
+      "effect": "allow"
+    },
+
+    // Проверка форматирования без изменения файлов
+    {
+      "action": "shell",
+      "resource": "cargo fmt --check *",
+      "effect": "allow"
+    },
+
+    // Информация о проекте
+    {
+      "action": "shell",
+      "resource": "cargo metadata *",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "cargo tree *",
+      "effect": "allow"
+    }
+  ]
+}
