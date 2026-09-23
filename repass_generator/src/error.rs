@@ -81,3 +81,22 @@ impl Display for SeparatorError {
 }
 
 impl std::error::Error for SeparatorError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DictionaryError {
+    DuplicateEntry(String),
+    EmptyEntry,
+    ResourceLimit,
+}
+
+impl Display for DictionaryError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateEntry(entry) => write!(f, "dictionary already contains {entry:?}"),
+            Self::EmptyEntry => write!(f, "dictionary entries must not be empty"),
+            Self::ResourceLimit => write!(f, "not enough memory to add dictionary entries"),
+        }
+    }
+}
+
+impl std::error::Error for DictionaryError {}

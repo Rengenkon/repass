@@ -30,6 +30,11 @@
       "resource": "cargo fmt --check *",
       "effect": "allow"
     },
+    {
+      "action": "shell",
+      "resource": "rustfmt *",
+      "effect": "allow"
+    },
 
     // Информация о проекте
     {
