@@ -1,51 +1,63 @@
-use crate::dictionary::Dictionary;
-use crate::query::Length::{Float, Hard};
+use crate::dictionary::cache::DictionaryCache;
+use crate::error::GeneratorError;
+use crate::query::Length::{Exact, Range};
 use crate::separator::Separator;
 
 pub enum Length {
-    Float(usize, usize),
-    Hard(usize),
+    Range { min: usize, max: usize },
+    Exact(usize),
 }
 
 impl Length {
-    pub fn to_one_size(self: &Self) -> usize {
+    pub fn validate(&self) -> Result<(), GeneratorError> {
         match self {
-            Float(min, max) => rand::random_range(*min..=*max),
-            Hard(value) => *value,
+            Range { min, max } if min > max => Err(GeneratorError::InvalidLengthRange {
+                min: *min,
+                max: *max,
+            }),
+            Range { min: 0, .. } | Exact(0) => Err(GeneratorError::ZeroLength),
+            _ => Ok(()),
         }
     }
 }
 
 impl Default for Length {
     fn default() -> Self {
-        Float(12, 20)
+        Range { min: 12, max: 20 }
     }
 }
 
 pub struct Query<'a> {
     length: Length,
-    dictionary: &'a dyn Dictionary,
+    dictionary: &'a DictionaryCache<'a>,
     separator: &'a dyn Separator,
 }
 
 impl<'a> Query<'a> {
     pub fn new(
         length: Length,
-        dictionary: &'a dyn Dictionary,
+        dictionary: &'a DictionaryCache<'a>,
         separator: &'a dyn Separator,
-    ) -> Self {
-        Query {
+    ) -> Result<Self, GeneratorError> {
+        length.validate()?;
+        if dictionary.is_empty() {
+            return Err(GeneratorError::EmptyDictionary);
+        }
+        separator
+            .validate()
+            .map_err(GeneratorError::InvalidSeparator)?;
+        Ok(Query {
             length,
             dictionary,
             separator,
-        }
+        })
     }
 
     pub fn length(&self) -> &Length {
         &self.length
     }
 
-    pub fn dictionary(&self) -> &'a dyn Dictionary {
+    pub fn dictionary(&self) -> &'a DictionaryCache<'a> {
         self.dictionary
     }
 
@@ -54,23 +66,24 @@ impl<'a> Query<'a> {
     }
 }
 
-
 #[cfg(test)]
 mod test {
-    use rstest::rstest;
-    use crate::query::Length::{Float, Hard};
+    use crate::query::Length::{Exact, Range};
 
     #[test]
     fn hard() {
-        let l = Hard(3);
-        assert_eq!(l.to_one_size(), 3);
+        let l = Exact(3);
+        assert_eq!(l.validate(), Ok(()));
     }
 
     #[test]
     fn float() {
-        let l = Float(12, 20);
-        let x = l.to_one_size();
-        println!("{}", x);
-        assert!((12..21).contains(&(x as i32)));
+        let l = Range { min: 12, max: 20 };
+        assert_eq!(l.validate(), Ok(()));
+    }
+
+    #[test]
+    fn rejects_invalid_range() {
+        assert!(Range { min: 9, max: 3 }.validate().is_err());
     }
 }
