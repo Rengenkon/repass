@@ -1,24 +1,38 @@
 use crate::dictionary::cache::DictionaryCache;
 use crate::error::GeneratorError;
+use crate::query::GenerationLimits;
 use crate::separator::SeparationShape;
 use rand::{Rng, RngExt};
 use std::collections::HashSet;
 
 type SearchState = (usize, usize); // (remaining content length, remaining parts)
-const MAX_PLANNER_STATES: usize = 100_000;
-
-pub(super) struct CombinationPlanner<'a> {
-    dictionary: &'a DictionaryCache<'a>,
+pub(super) struct CombinationPlanner<'dictionary, 'entries> {
+    dictionary: &'dictionary DictionaryCache<'entries>,
     failed: HashSet<SearchState>,
     visited: usize,
+    max_states: usize,
+    lengths_gcd: usize,
+    stack: Vec<(usize, usize, usize)>,
 }
 
-impl<'a> CombinationPlanner<'a> {
-    pub(super) fn new(dictionary: &'a DictionaryCache<'a>) -> Self {
+impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
+    pub(super) fn new(
+        dictionary: &'dictionary DictionaryCache<'entries>,
+        limits: GenerationLimits,
+    ) -> Self {
+        let lengths_gcd = dictionary
+            .available_lengths()
+            .iter()
+            .copied()
+            .reduce(gcd)
+            .unwrap_or(0);
         Self {
             dictionary,
             failed: HashSet::new(),
             visited: 0,
+            max_states: limits.max_planner_states,
+            lengths_gcd,
+            stack: Vec::new(),
         }
     }
 
@@ -43,6 +57,9 @@ impl<'a> CombinationPlanner<'a> {
         if shape.content_length < min_required || shape.content_length > max_possible {
             return Ok(None);
         }
+        if self.lengths_gcd == 0 || shape.content_length % self.lengths_gcd != 0 {
+            return Ok(None);
+        }
 
         if !self.can_complete(shape.content_length, shape.part_count, shape.content_length)? {
             return Ok(None);
@@ -57,7 +74,7 @@ impl<'a> CombinationPlanner<'a> {
                 target: shape.content_length,
             })?;
         while remaining_parts > 0 {
-            let mut viable_lengths = Vec::new();
+            let mut viable_count = 0usize;
             for &length in self.dictionary.available_lengths() {
                 if length > remaining_length {
                     break;
@@ -67,13 +84,34 @@ impl<'a> CombinationPlanner<'a> {
                     remaining_parts - 1,
                     shape.content_length,
                 )? {
-                    viable_lengths.push(length);
+                    viable_count += 1;
                 }
             }
-            if viable_lengths.is_empty() {
+            if viable_count == 0 {
                 return Ok(None);
             }
-            let length = viable_lengths[rng.random_range(0..viable_lengths.len())];
+            let selected_length = rng.random_range(0..viable_count);
+            let mut viable_index = 0;
+            let mut selected_length_value = None;
+            for &length in self.dictionary.available_lengths() {
+                if length > remaining_length {
+                    break;
+                }
+                if self.can_complete(
+                    remaining_length - length,
+                    remaining_parts - 1,
+                    shape.content_length,
+                )? {
+                    if viable_index == selected_length {
+                        selected_length_value = Some(length);
+                        break;
+                    }
+                    viable_index += 1;
+                }
+            }
+            let Some(length) = selected_length_value else {
+                return Ok(None);
+            };
             let indexes = self.dictionary.entries_with_length(length);
             let Some(index) = indexes.get(rng.random_range(0..indexes.len())).copied() else {
                 return Ok(None);
@@ -96,13 +134,14 @@ impl<'a> CombinationPlanner<'a> {
             return Ok(false);
         };
         let lengths = self.dictionary.available_lengths();
-        let mut stack = vec![(remaining_length, remaining_parts, 0usize)];
-        while let Some((length_left, parts_left, next_length_index)) = stack.pop() {
+        self.stack.clear();
+        self.stack.push((remaining_length, remaining_parts, 0usize));
+        while let Some((length_left, parts_left, next_length_index)) = self.stack.pop() {
             self.visited += 1;
-            if self.visited > MAX_PLANNER_STATES {
+            if self.visited > self.max_states {
                 return Err(GeneratorError::SearchLimitExceeded {
                     target,
-                    limit: MAX_PLANNER_STATES,
+                    limit: self.max_states,
                 });
             }
             if parts_left == 0 {
@@ -131,7 +170,8 @@ impl<'a> CombinationPlanner<'a> {
                 continue;
             }
 
-            stack.push((length_left, parts_left, next_length_index + 1));
+            self.stack
+                .push((length_left, parts_left, next_length_index + 1));
             let entry_length = lengths[next_length_index];
             let child_state = (length_left - entry_length, parts_left - 1);
             if child_state.1 == 0 {
@@ -141,11 +181,18 @@ impl<'a> CombinationPlanner<'a> {
                 continue;
             }
             if !self.failed.contains(&child_state) {
-                stack.push((child_state.0, child_state.1, 0));
+                self.stack.push((child_state.0, child_state.1, 0));
             }
         }
         Ok(false)
     }
+}
+
+fn gcd(mut left: usize, mut right: usize) -> usize {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left
 }
 
 #[cfg(test)]
@@ -158,7 +205,7 @@ mod tests {
         let dictionary =
             DictionaryCache::new(FileDictionary::from_entries(["a", "xy", "猫"]).unwrap()).unwrap();
         let mut rng = rand::rng();
-        let mut planner = CombinationPlanner::new(&dictionary);
+        let mut planner = CombinationPlanner::new(&dictionary, GenerationLimits::default());
         let plan = planner
             .find_plan(
                 SeparationShape {
@@ -184,7 +231,7 @@ mod tests {
             DictionaryCache::new(FileDictionary::from_entries(["ab"]).unwrap()).unwrap();
         let mut rng = rand::rng();
         assert!(
-            CombinationPlanner::new(&dictionary)
+            CombinationPlanner::new(&dictionary, GenerationLimits::default())
                 .find_plan(
                     SeparationShape {
                         content_length: 5,

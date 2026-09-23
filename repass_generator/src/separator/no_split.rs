@@ -1,95 +1,75 @@
-use crate::separator::{IllegalArgumentError, Separator, SeparatorInternal};
+use crate::error::SeparatorError;
+use crate::separator::{PartCount, SeparationRequirement, Separator, validate_parts};
 
-#[derive(Debug)]
-pub struct WithoutSeparator {}
+#[derive(Debug, Default)]
+pub struct WithoutSeparator;
 
 impl WithoutSeparator {
     pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Default for WithoutSeparator {
-    fn default() -> Self {
-        Self {}
-    }
-}
-
-impl SeparatorInternal for WithoutSeparator {
-    fn add_separator(self: &Self, parts: &[&str]) -> String {
-        parts.concat()
-    }
-
-    fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
-        super::get_summary_length(parts)
-    }
-
-    fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
-        let mut errors = Vec::new();
-        if parts.is_empty() {
-            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
-        }
-        if super::get_summary_length(parts) == 0 {
-            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
-        }
-        errors
+        Self
     }
 }
 
 impl Separator for WithoutSeparator {
-    fn try_compute_free_space(self: &Self, target_length: usize) -> Option<usize> {
-        Some(target_length)
+    fn validate(&self) -> Result<(), SeparatorError> {
+        Ok(())
+    }
+
+    fn requirement_for(
+        &self,
+        target_length: usize,
+    ) -> Result<SeparationRequirement, SeparatorError> {
+        if target_length == 0 {
+            return Ok(SeparationRequirement::Impossible { target_length });
+        }
+        Ok(SeparationRequirement::FixedContent {
+            content_length: target_length,
+            part_count: PartCount::Range {
+                min: 1,
+                max: target_length,
+            },
+        })
+    }
+
+    fn separate(&self, parts: &[&str]) -> Result<String, SeparatorError> {
+        let mut output = String::new();
+        self.write_separated(parts, &mut output)?;
+        Ok(output)
+    }
+
+    fn write_separated(&self, parts: &[&str], output: &mut String) -> Result<(), SeparatorError> {
+        validate_parts(parts)?;
+        for part in parts {
+            output.push_str(part);
+        }
+        Ok(())
+    }
+
+    fn output_length(
+        &self,
+        input_length: usize,
+        _parts_count: usize,
+    ) -> Result<usize, SeparatorError> {
+        Ok(input_length)
     }
 }
 
+#[cfg(test)]
 mod tests {
-    use super::WithoutSeparator;
-    use crate::separator::Separator;
-    use rstest::{fixture, rstest};
+    use super::*;
 
-    #[rstest]
-    #[case(vec!["1",])]
-    #[case(vec!["biba",])]
-    #[case(vec!["1", "2",])]
-    #[case(vec!["1", "2", "3",])]
-    #[case(vec!["1", "2", "3", "4",])]
-    #[case(vec!["biba", "boba",])]
-    fn length_test(
-        #[values(WithoutSeparator::new())] separator: WithoutSeparator,
-        #[case] input: Vec<&str>,
-    ) {
-        let result_len = separator.separate(&input).len();
-        let compute_len = separator.length_after_separate(&input);
-        assert_eq!(result_len, compute_len);
+    #[test]
+    fn joins_unicode_parts_without_changing_content() {
+        let separator = WithoutSeparator;
+        assert_eq!(separator.separate(&["é", "🦀"]).unwrap(), "é🦀");
+        assert_eq!(separator.length_after_separate(&["é", "🦀"]).unwrap(), 2);
     }
 
-    #[fixture]
-    fn separator() -> WithoutSeparator {
-        WithoutSeparator::new()
-    }
-
-    #[rstest]
-    #[case(Vec::new())]
-    #[case(vec![""])]
-    #[case(vec!["", "",])]
-    #[should_panic]
-    fn panic_test(#[values(separator())] separator: WithoutSeparator, #[case] input: Vec<&str>) {
-        separator.separate(&input);
-    }
-
-    #[rstest]
-    #[case(vec!["1",], "1")]
-    #[case(vec!["biba",], "biba")]
-    #[case(vec!["1", "2",], "12")]
-    #[case(vec!["1", "2", "3",], "123")]
-    #[case(vec!["1", "2", "3", "4",], "1234")]
-    #[case(vec!["biba", "boba",], "bibaboba")]
-    fn multi_long_test(
-        #[values(separator())] separator: WithoutSeparator,
-        #[case] input: Vec<&str>,
-        #[case] output: &str,
-    ) {
-        let result = separator.separate(&input);
-        assert_eq!(result, output);
+    #[test]
+    fn reports_empty_parts_as_an_error() {
+        assert_eq!(
+            WithoutSeparator.separate(&[]),
+            Err(SeparatorError::EmptyParts)
+        );
     }
 }

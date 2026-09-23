@@ -2,11 +2,9 @@ mod planner;
 
 use crate::dictionary::cache::DictionaryCache;
 use crate::error::GeneratorError;
-use crate::query::{Length, Query};
+use crate::query::{GenerationLimits, Length, Query};
 use crate::separator::Separator;
 use rand::{Rng, RngExt};
-
-const MAX_SHAPES_TO_CHECK: usize = 100_000;
 
 fn choose_target(length: &Length, rng: &mut impl Rng) -> Result<usize, GeneratorError> {
     length.validate()?;
@@ -22,24 +20,24 @@ fn generate_for_target(
     separator: &dyn Separator,
     target: usize,
     rng: &mut impl Rng,
+    limits: GenerationLimits,
 ) -> Result<String, GeneratorError> {
     separator
         .validate()
         .map_err(GeneratorError::InvalidSeparator)?;
-    let requirement = separator
-        .requirement_for(target)
+    let mut shapes = separator
+        .inputs_for_total(target)
         .map_err(GeneratorError::InvalidSeparator)?;
-    let mut shapes = requirement.into_shapes();
-    let mut planner = planner::CombinationPlanner::new(dictionary);
+    let mut planner = planner::CombinationPlanner::new(dictionary, limits);
     let mut found_shape = false;
-    for shape_index in 0..=MAX_SHAPES_TO_CHECK {
+    for shape_index in 0..=limits.max_shapes {
         let Some(shape) = shapes.next() else {
             break;
         };
-        if shape_index == MAX_SHAPES_TO_CHECK {
+        if shape_index == limits.max_shapes {
             return Err(GeneratorError::SearchLimitExceeded {
                 target,
-                limit: MAX_SHAPES_TO_CHECK,
+                limit: limits.max_shapes,
             });
         }
         found_shape = true;
@@ -85,7 +83,13 @@ pub fn generate_once(query: &Query) -> Result<String, GeneratorError> {
 /// Deterministic injection point for callers and tests that provide their own RNG.
 pub fn generate_once_with_rng(query: &Query, rng: &mut impl Rng) -> Result<String, GeneratorError> {
     let target = choose_target(query.length(), rng)?;
-    generate_for_target(query.dictionary(), query.separator(), target, rng)
+    generate_for_target(
+        query.dictionary(),
+        query.separator(),
+        target,
+        rng,
+        query.limits(),
+    )
 }
 
 pub fn generate_multi(query: &Query, count: usize) -> Result<Vec<String>, GeneratorError> {

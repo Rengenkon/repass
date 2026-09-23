@@ -1,72 +1,359 @@
-use enum_display::EnumDisplay;
+use crate::error::SeparatorError;
 
 pub mod fix_count;
 pub mod interval;
 pub mod no_split;
 pub mod on_parts;
 
-static DEFAULT_SEPARATOR: &str = "-";
+pub static DEFAULT_SEPARATOR: &str = "-";
 
-fn get_summary_length(parts: &[&str]) -> usize {
-    parts.iter().map(|part| part.len()).sum::<usize>()
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeparationShape {
+    /// Total Unicode scalar count in dictionary entries, excluding separators.
+    pub content_length: usize,
+    /// Number of dictionary entries that form the content.
+    pub part_count: usize,
 }
 
-fn format_error_msg(errors: &Vec<IllegalArgumentError>) -> String {
-    let mut result = String::from("Detected this errors for current Separator and parts:");
-    for error in errors {
-        result.push_str("\n\t-");
-        result.push_str(&error.to_string());
-    }
-    result.push_str("\n\n");
-    result
+/// Input dimensions used to calculate a separator's output without rendering it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputShape {
+    /// Unicode scalar count in the content, excluding separators.
+    pub content_chars: usize,
+    /// Number of non-empty dictionary entries in the content.
+    pub groups: usize,
 }
 
-fn try_panic(errors: &Vec<IllegalArgumentError>) {
-    if !errors.is_empty() {
-        let errors_msg = format_error_msg(&errors);
-        panic!("{}", errors_msg)
-    }
+/// Exact character counts for a particular separator layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Layout {
+    pub input: InputShape,
+    pub separator_chars: usize,
+    pub total_chars: usize,
 }
 
-pub trait SeparatorInternal {
-    fn add_separator(self: &Self, parts: &[&str]) -> String;
-    fn length_with_separators(self: &Self, parts: &[&str]) -> usize;
-    fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartCount {
+    Exact(usize),
+    Range { min: usize, max: usize },
 }
 
-/// Determine public functions for working with 'Separators'
-///
-/// 'Sequence' is 'parts or character of parts'
-pub trait Separator: SeparatorInternal {
-    /// Separate sequence with setuped separator segment
-    fn separate(self: &Self, parts: &[&str]) -> String {
-        let errors = self.chack_errors(parts);
-        try_panic(&errors);
-        self.add_separator(parts)
-    }
-
-    /// Compute final length of sequence with separators
-    fn length_after_separate(self: &Self, parts: &[&str]) -> usize {
-        let errors = self.chack_errors(parts);
-        try_panic(&errors);
-        self.length_with_separators(parts)
-    }
-
-    /// Compute count free spaces for chars for `target_length` if it possible
-    /// Guarantee that for `summary parts length` equals returned value of `free_space`
-    /// - method `length_after_separate` return the value equals `target_length`
-    /// - length of returned value of method `separate` equals `target_length`
-    fn try_compute_free_space(self: &Self, target_length: usize) -> Option<usize>;
-
-    /// Check common errors in Separator or parts
-    fn validate(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
-        self.chack_errors(parts)
+impl PartCount {
+    fn into_iter(self) -> PartCountIter {
+        PartCountIter(match self {
+            Self::Exact(value) => PartCountIterKind::Exact(Some(value)),
+            Self::Range { min, max } => PartCountIterKind::Range(min..=max),
+        })
     }
 }
 
-#[derive(Debug, EnumDisplay)]
-pub enum IllegalArgumentError {
-    EmptySeparator,
-    AdditionalParameterIsZero,
-    SummaryLengthOfPartsIsZero,
+struct PartCountIter(PartCountIterKind);
+
+enum PartCountIterKind {
+    Exact(Option<usize>),
+    Range(std::ops::RangeInclusive<usize>),
+}
+
+impl Iterator for PartCountIter {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.0 {
+            PartCountIterKind::Exact(value) => value.take(),
+            PartCountIterKind::Range(values) => values.next(),
+        }
+    }
+}
+
+pub enum SeparationRequirement {
+    Single(SeparationShape),
+    FixedContent {
+        content_length: usize,
+        part_count: PartCount,
+    },
+    BetweenParts {
+        target_length: usize,
+        separator_length: usize,
+    },
+    Impossible {
+        target_length: usize,
+    },
+}
+
+impl SeparationRequirement {
+    pub fn into_shapes(self) -> ShapeIter {
+        match self {
+            Self::Single(shape) => ShapeIter(ShapeIterKind::Single(Some(shape))),
+            Self::FixedContent {
+                content_length,
+                part_count,
+            } => ShapeIter(ShapeIterKind::FixedContent {
+                content_length,
+                part_count: part_count.into_iter(),
+            }),
+            Self::BetweenParts {
+                target_length,
+                separator_length,
+            } if target_length > 0 && separator_length > 0 => {
+                ShapeIter(ShapeIterKind::BetweenParts {
+                    target_length,
+                    separator_length,
+                    next_part_count: Some(1),
+                    max_parts: (target_length - 1) / separator_length + 1,
+                })
+            }
+            Self::BetweenParts { .. } | Self::Impossible { .. } => ShapeIter(ShapeIterKind::Empty),
+        }
+    }
+}
+
+/// Lazily enumerates feasible input shapes without allocating a boxed iterator.
+pub struct ShapeIter(ShapeIterKind);
+
+enum ShapeIterKind {
+    Single(Option<SeparationShape>),
+    FixedContent {
+        content_length: usize,
+        part_count: PartCountIter,
+    },
+    BetweenParts {
+        target_length: usize,
+        separator_length: usize,
+        next_part_count: Option<usize>,
+        max_parts: usize,
+    },
+    Empty,
+}
+
+impl Iterator for ShapeIter {
+    type Item = SeparationShape;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.0 {
+            ShapeIterKind::Single(shape) => shape.take(),
+            ShapeIterKind::FixedContent {
+                content_length,
+                part_count,
+            } => part_count.next().map(|part_count| SeparationShape {
+                content_length: *content_length,
+                part_count,
+            }),
+            ShapeIterKind::BetweenParts {
+                target_length,
+                separator_length,
+                next_part_count,
+                max_parts,
+            } => {
+                while let Some(part_count) = *next_part_count {
+                    if part_count > *max_parts {
+                        return None;
+                    }
+                    *next_part_count = part_count.checked_add(1);
+                    let separator_chars = separator_length.checked_mul(part_count - 1)?;
+                    let content_length = target_length.checked_sub(separator_chars)?;
+                    if content_length > 0 {
+                        return Some(SeparationShape {
+                            content_length,
+                            part_count,
+                        });
+                    }
+                }
+                None
+            }
+            ShapeIterKind::Empty => None,
+        }
+    }
+}
+
+pub fn get_summary_length(parts: &[&str]) -> usize {
+    parts.iter().map(|part| part.chars().count()).sum()
+}
+
+pub fn validate_parts(parts: &[&str]) -> Result<(), SeparatorError> {
+    if parts.is_empty() {
+        return Err(SeparatorError::EmptyParts);
+    }
+    if parts.iter().any(|part| part.is_empty()) {
+        return Err(SeparatorError::EmptyPart);
+    }
+    Ok(())
+}
+
+pub(super) fn find_content_length(
+    target_length: usize,
+    mut output_length: impl FnMut(usize) -> Result<usize, SeparatorError>,
+) -> Result<Option<usize>, SeparatorError> {
+    if target_length == 0 {
+        return Ok(None);
+    }
+    let (mut low, mut high) = (1, target_length);
+    while low <= high {
+        let candidate = low + (high - low) / 2;
+        match output_length(candidate) {
+            Ok(output) if output == target_length => return Ok(Some(candidate)),
+            Ok(output) if output < target_length => low = candidate + 1,
+            Ok(_) | Err(SeparatorError::LengthOverflow) => {
+                if candidate == 1 {
+                    return Ok(None);
+                }
+                high = candidate - 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(None)
+}
+
+pub trait Separator {
+    fn validate(&self) -> Result<(), SeparatorError>;
+
+    /// Enumerates finite input shapes that can produce the requested output length.
+    fn requirement_for(
+        &self,
+        target_length: usize,
+    ) -> Result<SeparationRequirement, SeparatorError>;
+
+    /// Lazily yields feasible content/group shapes for a requested total length.
+    fn inputs_for_total(&self, total_chars: usize) -> Result<ShapeIter, SeparatorError> {
+        self.requirement_for(total_chars)
+            .map(SeparationRequirement::into_shapes)
+    }
+
+    /// Separates parts. Length is measured in Unicode scalar values.
+    fn separate(&self, parts: &[&str]) -> Result<String, SeparatorError>;
+
+    /// Appends the separated parts to a caller-owned buffer.
+    fn write_separated(&self, parts: &[&str], output: &mut String) -> Result<(), SeparatorError> {
+        output.push_str(&self.separate(parts)?);
+        Ok(())
+    }
+
+    /// Computes output length in Unicode scalar values for given input length
+    /// and number of dictionary entries.
+    fn output_length(
+        &self,
+        input_length: usize,
+        parts_count: usize,
+    ) -> Result<usize, SeparatorError>;
+
+    /// Calculates the complete layout for named input dimensions.
+    fn layout_for(&self, input: InputShape) -> Result<Layout, SeparatorError> {
+        let total_chars = self.output_length(input.content_chars, input.groups)?;
+        let separator_chars = total_chars
+            .checked_sub(input.content_chars)
+            .ok_or(SeparatorError::LengthOverflow)?;
+        Ok(Layout {
+            input,
+            separator_chars,
+            total_chars,
+        })
+    }
+
+    fn length_after_separate(&self, parts: &[&str]) -> Result<usize, SeparatorError> {
+        validate_parts(parts)?;
+        self.output_length(get_summary_length(parts), parts.len())
+    }
+}
+
+#[cfg(test)]
+mod requirement_tests {
+    use super::*;
+    use crate::separator::{
+        fix_count::FixCountSeparator, interval::FixIntervalSeparator, no_split::WithoutSeparator,
+        on_parts::BetweenPartsSeparator,
+    };
+
+    #[test]
+    fn fixed_content_requirement_is_iterated_lazily() {
+        let requirement = WithoutSeparator.requirement_for(3).unwrap();
+        let shapes: Vec<_> = requirement.into_shapes().collect();
+        assert_eq!(
+            shapes,
+            vec![
+                SeparationShape {
+                    content_length: 3,
+                    part_count: 1,
+                },
+                SeparationShape {
+                    content_length: 3,
+                    part_count: 2,
+                },
+                SeparationShape {
+                    content_length: 3,
+                    part_count: 3,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn between_parts_shapes_are_generated_on_demand() {
+        let separator = BetweenPartsSeparator::new("--");
+        let requirement = separator.requirement_for(8).unwrap();
+        let mut shapes = requirement.into_shapes();
+        assert_eq!(
+            shapes.next(),
+            Some(SeparationShape {
+                content_length: 8,
+                part_count: 1,
+            })
+        );
+        assert_eq!(
+            shapes.next(),
+            Some(SeparationShape {
+                content_length: 6,
+                part_count: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn interval_and_fixed_count_detect_unreachable_target_lengths() {
+        assert!(matches!(
+            FixIntervalSeparator::new("-", 3)
+                .requirement_for(12)
+                .unwrap(),
+            SeparationRequirement::Impossible { target_length: 12 }
+        ));
+        assert!(matches!(
+            FixCountSeparator::new("::", 2).requirement_for(3).unwrap(),
+            SeparationRequirement::Impossible { target_length: 3 }
+        ));
+    }
+
+    #[test]
+    fn layout_reports_content_separator_and_total_lengths() {
+        let separator = BetweenPartsSeparator::new("🟠-");
+        let layout = separator
+            .layout_for(InputShape {
+                content_chars: 5,
+                groups: 3,
+            })
+            .unwrap();
+        assert_eq!(layout.separator_chars, 4);
+        assert_eq!(layout.total_chars, 9);
+    }
+
+    #[test]
+    fn between_parts_cursor_handles_maximum_target_without_overflowing() {
+        let requirement = SeparationRequirement::BetweenParts {
+            target_length: usize::MAX,
+            separator_length: 1,
+        };
+        let mut shapes = requirement.into_shapes();
+        assert_eq!(
+            shapes.next(),
+            Some(SeparationShape {
+                content_length: usize::MAX,
+                part_count: 1,
+            })
+        );
+        assert_eq!(
+            shapes.next(),
+            Some(SeparationShape {
+                content_length: usize::MAX - 1,
+                part_count: 2,
+            })
+        );
+    }
 }

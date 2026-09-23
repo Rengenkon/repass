@@ -1,5 +1,5 @@
-use super::{DEFAULT_SEPARATOR, IllegalArgumentError, Separator, SeparatorInternal};
-use core::str;
+use super::{DEFAULT_SEPARATOR, SeparationRequirement, Separator, validate_parts};
+use crate::error::SeparatorError;
 
 #[derive(Debug)]
 pub struct BetweenPartsSeparator<'a> {
@@ -12,7 +12,7 @@ impl<'a> BetweenPartsSeparator<'a> {
     }
 }
 
-impl<'a> Default for BetweenPartsSeparator<'a> {
+impl Default for BetweenPartsSeparator<'_> {
     fn default() -> Self {
         Self {
             separator: DEFAULT_SEPARATOR,
@@ -20,113 +20,83 @@ impl<'a> Default for BetweenPartsSeparator<'a> {
     }
 }
 
-impl SeparatorInternal for BetweenPartsSeparator<'_> {
-    fn add_separator(self: &Self, parts: &[&str]) -> String {
-        parts.join(self.separator)
-    }
-
-    fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
-        let base_length = super::get_summary_length(parts);
-        base_length + self.separator.len() * (parts.len() - 1)
-    }
-
-    fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
-        let mut errors = Vec::new();
-        if self.separator.is_empty() {
-            errors.push(IllegalArgumentError::EmptySeparator)
-        }
-        if parts.is_empty() {
-            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
-        }
-        if super::get_summary_length(parts) == 0 {
-            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
-        }
-        errors
-    }
-}
-
 impl Separator for BetweenPartsSeparator<'_> {
-    fn try_compute_free_space(self: &Self, target_length: usize) -> Option<usize> {
-        None
+    fn validate(&self) -> Result<(), SeparatorError> {
+        if self.separator.is_empty() {
+            Err(SeparatorError::EmptySeparator)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn requirement_for(
+        &self,
+        target_length: usize,
+    ) -> Result<SeparationRequirement, SeparatorError> {
+        self.validate()?;
+        let separator_length = self.separator.chars().count();
+        if target_length == 0 {
+            return Ok(SeparationRequirement::Impossible { target_length });
+        }
+        Ok(SeparationRequirement::BetweenParts {
+            target_length,
+            separator_length,
+        })
+    }
+
+    fn separate(&self, parts: &[&str]) -> Result<String, SeparatorError> {
+        let mut output = String::new();
+        self.write_separated(parts, &mut output)?;
+        Ok(output)
+    }
+
+    fn write_separated(&self, parts: &[&str], output: &mut String) -> Result<(), SeparatorError> {
+        self.validate()?;
+        validate_parts(parts)?;
+        for (index, part) in parts.iter().enumerate() {
+            if index > 0 {
+                output.push_str(self.separator);
+            }
+            output.push_str(part);
+        }
+        Ok(())
+    }
+
+    fn output_length(
+        &self,
+        input_length: usize,
+        parts_count: usize,
+    ) -> Result<usize, SeparatorError> {
+        self.validate()?;
+        input_length
+            .checked_add(
+                self.separator
+                    .chars()
+                    .count()
+                    .checked_mul(parts_count.saturating_sub(1))
+                    .ok_or(SeparatorError::LengthOverflow)?,
+            )
+            .ok_or(SeparatorError::LengthOverflow)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BetweenPartsSeparator, Separator};
-    use rstest::{fixture, rstest};
+    use super::*;
 
-    #[fixture]
-    fn empty<'a>() -> BetweenPartsSeparator<'a> {
-        BetweenPartsSeparator::new("")
+    #[test]
+    fn computes_between_part_length_for_multichar_separator() {
+        let separator = BetweenPartsSeparator::new("🟠-");
+        let parts = ["猫", "é"];
+        assert_eq!(separator.separate(&parts).unwrap(), "猫🟠-é");
+        assert_eq!(separator.length_after_separate(&parts).unwrap(), 4);
     }
 
-    #[fixture]
-    fn dash<'a>() -> BetweenPartsSeparator<'a> {
-        BetweenPartsSeparator::new("-")
-    }
-
-    #[fixture]
-    fn long<'a>() -> BetweenPartsSeparator<'a> {
-        BetweenPartsSeparator::new("boba")
-    }
-
-    #[rstest]
-    #[case(vec!["1",])]
-    #[case(vec!["biba",])]
-    #[case(vec!["1", "2",])]
-    #[case(vec!["1", "2", "3",])]
-    #[case(vec!["1", "2", "3", "4",])]
-    #[case(vec!["biba", "boba",])]
-    #[should_panic]
-    fn invalid_separator_panic_test(
-        #[values(empty())] separator: BetweenPartsSeparator,
-        #[case] input: Vec<&str>,
-    ) {
-        separator.separate(&input);
-    }
-
-    #[rstest]
-    #[case(Vec::new())]
-    #[case(vec![""])]
-    #[case(vec!["", "",])]
-    #[should_panic]
-    fn invalid_data_panic_test(
-        #[values(dash(), long())] separator: BetweenPartsSeparator,
-        #[case] input: Vec<&str>,
-    ) {
-        separator.separate(&input);
-    }
-
-    #[rstest]
-    #[case(vec!["1",], "1")]
-    #[case(vec!["biba",], "biba")]
-    #[case(vec!["1", "2",], "1-2")]
-    #[case(vec!["1", "2", "3",], "1-2-3")]
-    #[case(vec!["1", "2", "3", "4",], "1-2-3-4")]
-    #[case(vec!["biba", "boba",], "biba-boba")]
-    fn dash_test(
-        #[from(dash)] separator: BetweenPartsSeparator,
-        #[case] input: Vec<&str>,
-        #[case] output: &str,
-    ) {
-        let result = separator.separate(&input);
-        assert_eq!(result, output);
-    }
-
-    #[rstest]
-    #[case(vec!["1",], "1")]
-    #[case(vec!["biba",], "biba")]
-    #[case(vec!["1", "2",], "1boba2")]
-    #[case(vec!["1", "2", "3",], "1boba2boba3")]
-    #[case(vec!["1", "2", "3", "4",], "1boba2boba3boba4")]
-    #[case(vec!["biba", "boba",], "bibabobaboba")]
-    fn long_test(
-        #[from(long)] separator: BetweenPartsSeparator,
-        #[case] input: Vec<&str>,
-        #[case] output: &str,
-    ) {
-        let result = separator.separate(&input);
-        assert_eq!(result, output);
+    #[test]
+    fn rejects_empty_separator_without_panicking() {
+        assert_eq!(
+            BetweenPartsSeparator::new("").validate(),
+            Err(SeparatorError::EmptySeparator)
+        );
     }
 }

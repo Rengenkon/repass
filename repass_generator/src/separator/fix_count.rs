@@ -1,110 +1,15 @@
-use super::{DEFAULT_SEPARATOR, IllegalArgumentError, Separator, SeparatorInternal};
-use std::cmp::{Ordering, max, min};
+use super::{
+    DEFAULT_SEPARATOR, PartCount, SeparationRequirement, Separator, find_content_length,
+    validate_parts,
+};
+use crate::error::SeparatorError;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Align {
     Left,
     Right,
 }
 
-struct MetaInf {
-    input_length: usize,
-    separates_count: usize,
-    parts_count: usize,
-    chars_in_part: usize,
-    chars_out_part: usize,
-}
-
-fn separator_indexes(meta: &MetaInf) -> Vec<usize> {
-    let parts_size = parts_sizes(meta);
-    part_sizes_to_separators_indexes(0, &parts_size[0..meta.separates_count])
-}
-
-fn align_parts_size(capacity: usize, out_part: usize, in_part: usize, align: Align) -> Vec<usize> {
-    let mut sizes = Vec::with_capacity(capacity);
-    for part in 0..capacity {
-        if (align == Align::Left && part < out_part)
-            || (align == Align::Right && part >= capacity - out_part)
-        {
-            sizes.push(in_part + 1);
-        } else {
-            sizes.push(in_part);
-        }
-    }
-    sizes
-}
-
-fn half_parts_sizes(meta: &MetaInf, align: Align) -> Vec<usize> {
-    if meta.parts_count == 1 || meta.chars_out_part == 1 {
-        return Vec::new();
-    }
-    let half_chars_out_part = meta.chars_out_part / 2;
-    let capacity = if meta.chars_in_part == 0 {
-        half_chars_out_part
-    } else {
-        meta.parts_count / 2
-    };
-    align_parts_size(capacity, half_chars_out_part, meta.chars_in_part, align)
-}
-
-fn middle_parts_sizes(meta: &MetaInf) -> Vec<usize> {
-    let mut count = meta.chars_out_part % 2;
-    if meta.parts_count % 2 == 1 {
-        count += meta.chars_in_part;
-    }
-    if count == 0 {
-        return Vec::new();
-    }
-    vec![count]
-}
-
-fn parts_sizes(meta: &MetaInf) -> Vec<usize> {
-    if meta.chars_out_part % 2 == 1 && meta.parts_count % 2 == 0 {
-        align_parts_size(
-            meta.parts_count,
-            meta.chars_out_part,
-            meta.chars_in_part,
-            Align::Left,
-        )
-    } else {
-        // todo invert if user want it
-        let left_align = Align::Left;
-        let right_align = Align::Right;
-
-        let lmr_sizes = [
-            half_parts_sizes(meta, left_align),
-            middle_parts_sizes(meta),
-            half_parts_sizes(meta, right_align),
-        ];
-        let mut result = Vec::new();
-        lmr_sizes
-            .iter()
-            .for_each(|sizes| result.extend_from_slice(sizes));
-        result
-    }
-}
-
-fn part_sizes_to_separators_indexes(offset: usize, sizes: &[usize]) -> Vec<usize> {
-    let mut result = Vec::with_capacity(sizes.len());
-    let mut value: isize = offset as isize - 1;
-    for size in sizes {
-        value += *size as isize + 1;
-        result.push(value as usize);
-    }
-    result
-}
-
-/// Separate parts with setuped count of separator segments.
-/// Length of parts doesn't matter
-///
-/// # Note
-/// `X` - setuped count of separator segments
-/// `L` - summary length of given parts
-///
-/// If `L` less that `X + 1`
-/// Then use only `L - 1` separator segment
-///
-/// If 'L' equals 0 then program panic
 #[derive(Debug)]
 pub struct FixCountSeparator<'a> {
     separator: &'a str,
@@ -115,81 +20,9 @@ impl<'a> FixCountSeparator<'a> {
     pub fn new(separator: &'a str, count: usize) -> Self {
         Self { separator, count }
     }
-
-    fn count_separates(self: &Self, length: usize) -> usize {
-        max(0, min(length as isize - 1, self.count as isize)) as usize
-    }
-
-    fn get_meta_inf(self: &Self, parts: &[&str]) -> MetaInf {
-        let input_length = super::get_summary_length(parts);
-        let separates_count = self.count_separates(input_length);
-        let parts_count = separates_count + 1;
-        let in_part = input_length / parts_count;
-        let out_part = input_length % parts_count;
-        MetaInf {
-            input_length,
-            separates_count,
-            parts_count,
-            chars_in_part: in_part,
-            chars_out_part: out_part,
-        }
-    }
-
-    fn generic_assemble(self: &Self, separate_indexes: &[usize], raw_parts: &[&str]) -> String {
-        let capacity = self.length_with_separators(raw_parts);
-        let mut result = String::with_capacity(capacity);
-        let mut indexes_iter = separate_indexes.iter();
-        let mut parts_iter = raw_parts.iter();
-        let separator = self.separator;
-
-        let mut part = "";
-        let mut separate_index = indexes_iter.next();
-        let mut cmp_result = Ordering::Less;
-        let mut current_write_index = 0;
-
-        loop {
-            if separate_index.is_none() {
-                result.push_str(part);
-                let op = parts_iter.next();
-                if op.is_none() {
-                    break;
-                }
-                part = op.unwrap();
-            } else {
-                if cmp_result != Ordering::Greater {
-                    let op = parts_iter.next();
-                    if op.is_some() {
-                        part = op.unwrap();
-                    } else {
-                        result.push_str(separator);
-                        while indexes_iter.next().is_some() {
-                            result.push_str(separator);
-                        }
-                        break;
-                    }
-                }
-                let diff = separate_index.unwrap() - current_write_index;
-                cmp_result = part.len().cmp(&diff);
-                if cmp_result == Ordering::Greater {
-                    let (left, right) = part.split_at(diff);
-                    part = right;
-                    result.push_str(left);
-                    current_write_index += left.len();
-                    result.push_str(separator);
-                    current_write_index += 1;
-                    separate_index = indexes_iter.next();
-                    continue;
-                } else {
-                    result.push_str(part);
-                    current_write_index += part.len();
-                }
-            }
-        }
-        result
-    }
 }
 
-impl<'a> Default for FixCountSeparator<'a> {
+impl Default for FixCountSeparator<'_> {
     fn default() -> Self {
         Self {
             separator: DEFAULT_SEPARATOR,
@@ -198,254 +31,121 @@ impl<'a> Default for FixCountSeparator<'a> {
     }
 }
 
-impl SeparatorInternal for FixCountSeparator<'_> {
-    fn add_separator(self: &Self, parts: &[&str]) -> String {
-        let meta = self.get_meta_inf(parts);
-        let separator_indexes = separator_indexes(&meta);
-        self.generic_assemble(&separator_indexes, parts)
-    }
-
-    fn length_with_separators(self: &Self, parts: &[&str]) -> usize {
-        let summary = super::get_summary_length(parts);
-        summary + self.count_separates(summary) * self.separator.len()
-    }
-
-    fn chack_errors(self: &Self, parts: &[&str]) -> Vec<IllegalArgumentError> {
-        let mut errors = Vec::new();
+impl Separator for FixCountSeparator<'_> {
+    fn validate(&self) -> Result<(), SeparatorError> {
         if self.separator.is_empty() {
-            errors.push(IllegalArgumentError::EmptySeparator)
+            return Err(SeparatorError::EmptySeparator);
         }
         if self.count == 0 {
-            errors.push(IllegalArgumentError::AdditionalParameterIsZero)
+            return Err(SeparatorError::ZeroCount);
         }
-        if parts.is_empty() {
-            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
-        }
-        if super::get_summary_length(parts) == 0 {
-            errors.push(IllegalArgumentError::SummaryLengthOfPartsIsZero)
-        }
-        errors
+        Ok(())
     }
-}
 
-impl Separator for FixCountSeparator<'_> {
-    fn try_compute_free_space(self: &Self, target_length: usize) -> Option<usize> {
-        if target_length == 0 {
-            return None;
+    fn requirement_for(
+        &self,
+        target_length: usize,
+    ) -> Result<SeparationRequirement, SeparatorError> {
+        self.validate()?;
+        let Some(content_length) =
+            find_content_length(target_length, |length| self.output_length(length, 1))?
+        else {
+            return Ok(SeparationRequirement::Impossible { target_length });
+        };
+        Ok(SeparationRequirement::FixedContent {
+            content_length,
+            part_count: PartCount::Range {
+                min: 1,
+                max: content_length,
+            },
+        })
+    }
+
+    fn separate(&self, parts: &[&str]) -> Result<String, SeparatorError> {
+        let mut output = String::new();
+        self.write_separated(parts, &mut output)?;
+        Ok(output)
+    }
+
+    fn write_separated(&self, parts: &[&str], output: &mut String) -> Result<(), SeparatorError> {
+        self.validate()?;
+        validate_parts(parts)?;
+        let content_length = super::get_summary_length(parts);
+        let separator_count = self.count.min(content_length.saturating_sub(1));
+        let mut next_separator = 1;
+        let mut consumed = 0usize;
+        for part in parts {
+            for ch in part.chars() {
+                output.push(ch);
+                consumed += 1;
+                if next_separator <= separator_count
+                    && consumed
+                        == ((next_separator as u128 * content_length as u128)
+                            / (separator_count as u128 + 1))
+                            .max(next_separator as u128) as usize
+                {
+                    output.push_str(self.separator);
+                    next_separator += 1;
+                }
+            }
         }
-        let pairs_len = target_length - 1;
-        let one_pair_len = self.separator.len() + 1;
-        let virtual_count = pairs_len / one_pair_len;
-        if virtual_count < self.count && pairs_len % one_pair_len != 0 {
-            return None;
-        }
-        let count_separators = min(self.count, virtual_count);
-        Some(target_length - self.separator.len() * count_separators)
+        Ok(())
+    }
+
+    fn output_length(
+        &self,
+        input_length: usize,
+        _parts_count: usize,
+    ) -> Result<usize, SeparatorError> {
+        self.validate()?;
+        let count = self.count.min(input_length.saturating_sub(1));
+        input_length
+            .checked_add(
+                self.separator
+                    .chars()
+                    .count()
+                    .checked_mul(count)
+                    .ok_or(SeparatorError::LengthOverflow)?,
+            )
+            .ok_or(SeparatorError::LengthOverflow)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    mod public_functional {
-        use super::super::{FixCountSeparator, Separator};
-        use crate::separator::get_summary_length;
-        use rstest::{fixture, rstest};
+    use super::*;
 
-        #[fixture]
-        fn without_separator<'a>() -> FixCountSeparator<'a> {
-            FixCountSeparator::new("", 10)
-        }
-
-        #[fixture]
-        fn without_count<'a>() -> FixCountSeparator<'a> {
-            FixCountSeparator::new("-", 0)
-        }
-
-        #[fixture]
-        fn one_dash<'a>() -> FixCountSeparator<'a> {
-            FixCountSeparator::new("-", 1)
-        }
-
-        #[fixture]
-        fn one_long<'a>() -> FixCountSeparator<'a> {
-            FixCountSeparator::new("biba", 1)
-        }
-
-        #[fixture]
-        fn multi_long<'a>() -> FixCountSeparator<'a> {
-            FixCountSeparator::new("aAa", 4)
-        }
-
-        #[rstest]
-        #[case(vec!["1",])]
-        #[case(vec!["biba",])]
-        #[case(vec!["1", "2",])]
-        #[case(vec!["1", "2", "3",])]
-        #[case(vec!["1", "2", "3", "4",])]
-        #[case(vec!["biba", "boba",])]
-        #[should_panic]
-        fn invalid_separator_panic_test(
-            #[values(without_separator(), without_count())] separator: FixCountSeparator,
-            #[case] input: Vec<&str>,
-        ) {
-            separator.separate(&input);
-        }
-
-        #[rstest]
-        #[case(Vec::new())]
-        #[case(vec![""])]
-        #[case(vec!["", "",])]
-        #[should_panic]
-        fn invalid_data_panic_test(
-            #[values(one_dash(), one_long(), multi_long())] separator: FixCountSeparator,
-            #[case] input: Vec<&str>,
-        ) {
-            separator.separate(&input);
-        }
-
-        #[rstest]
-        #[case(vec!["1",])]
-        #[case(vec!["biba",])]
-        #[case(vec!["1", "2",])]
-        #[case(vec!["1", "2", "3",])]
-        #[case(vec!["1", "2", "3", "4",])]
-        #[case(vec!["biba", "boba",])]
-        fn length_test(
-            #[values(one_dash(), one_long(), multi_long())] separator: FixCountSeparator,
-            #[case] input: Vec<&str>,
-        ) {
-            let result_len = separator.separate(&input).len();
-            let compute_len = separator.length_after_separate(&input);
-            assert_eq!(result_len, compute_len);
-        }
-
-        #[rstest]
-        #[case(vec!["1",], "1")]
-        #[case(vec!["biba",], "bi-ba")]
-        #[case(vec!["1", "2",], "1-2")]
-        #[case(vec!["1", "2", "3",], "12-3")]
-        #[case(vec!["1", "2", "3", "4",], "12-34")]
-        #[case(vec!["biba", "boba",], "biba-boba")]
-        fn one_dash_test(
-            #[from(one_dash)] separator: FixCountSeparator,
-            #[case] input: Vec<&str>,
-            #[case] output: &str,
-        ) {
-            let result = separator.separate(&input);
-            assert_eq!(result, output);
-        }
-
-        #[rstest]
-        #[case(vec!["1",], "1")]
-        #[case(vec!["biba",], "bibibaba")]
-        #[case(vec!["1", "2",], "1biba2")]
-        #[case(vec!["1", "2", "3",], "12biba3")]
-        #[case(vec!["1", "2", "3", "4",], "12biba34")]
-        #[case(vec!["biba", "boba",], "bibabibaboba")]
-        fn one_long_test(
-            #[from(one_long)] separator: FixCountSeparator,
-            #[case] input: Vec<&str>,
-            #[case] output: &str,
-        ) {
-            let result = separator.separate(&input);
-            assert_eq!(result, output);
-        }
-
-        #[rstest]
-        #[case(vec!["1",], "1")]
-        #[case(vec!["biba",], "baAaiaAabaAaa")]
-        #[case(vec!["1", "2",], "1aAa2")]
-        #[case(vec!["1", "2", "3",], "1aAa2aAa3")]
-        #[case(vec!["1", "2", "3", "4",], "1aAa2aAa3aAa4")]
-        #[case(vec!["biba", "boba",], "biaAabaAaabaAaoaAaba")]
-        fn multi_long_test(
-            #[from(multi_long)] separator: FixCountSeparator,
-            #[case] input: Vec<&str>,
-            #[case] output: &str,
-        ) {
-            let result = separator.separate(&input);
-            assert_eq!(result, output);
-        }
-
-        #[rstest]
-        #[case(vec!["1",])]
-        #[case(vec!["biba",])]
-        #[case(vec!["1", "2",])]
-        #[case(vec!["1", "2", "3",])]
-        #[case(vec!["1", "2", "3", "4",])]
-        #[case(vec!["biba", "boba",])]
-        fn space_test(
-            #[values(one_dash(), one_long(), multi_long())] separator: FixCountSeparator,
-            #[case] input: Vec<&str>,
-        ) {
-            let stat_len = get_summary_length(&input);
-            let compute_len = separator.length_after_separate(&input);
-            let spaces = separator.try_compute_free_space(compute_len).unwrap();
-            assert_eq!(stat_len, spaces);
-        }
-
-        #[rstest]
-        #[case(0, None)]
-        #[case(1, Some(1))]
-        #[case(2, None)]
-        #[case(3, Some(2))]
-        #[case(10, Some(9))]
-        fn one_dash_space_test(
-            #[from(one_dash)] separator: FixCountSeparator,
-            #[case] input: usize,
-            #[case] output: Option<usize>,
-        ) {
-            let result = separator.try_compute_free_space(input);
-            assert_eq!(result, output);
-        }
-
-        #[rstest]
-        #[case(0, None)]
-        #[case(1, Some(1))]
-        #[case(2, None)]
-        #[case(5, None)]
-        #[case(6, Some(2))]
-        #[case(10, Some(6))]
-        fn one_long_space_test(
-            #[from(one_long)] separator: FixCountSeparator,
-            #[case] input: usize,
-            #[case] output: Option<usize>,
-        ) {
-            let result = separator.try_compute_free_space(input);
-            assert_eq!(result, output);
-        }
-
-        #[rstest]
-        #[case(0, None)]
-        #[case(1, Some(1))]
-        #[case(2, None)]
-        #[case(4, None)]
-        #[case(5, Some(2))]
-        #[case(6, None)]
-        #[case(7, None)]
-        #[case(8, None)]
-        #[case(9, Some(3))]
-        fn multi_long_space_test(
-            #[from(multi_long)] separator: FixCountSeparator,
-            #[case] input: usize,
-            #[case] output: Option<usize>,
-        ) {
-            let result = separator.try_compute_free_space(input);
-            assert_eq!(result, output);
-        }
+    #[test]
+    fn fixed_count_handles_unicode_and_multichar_separator() {
+        let separator = FixCountSeparator::new("🟠-", 2);
+        let parts = ["猫abcé"];
+        let output = separator.separate(&parts).unwrap();
+        assert_eq!(output, "猫🟠-ab🟠-cé");
+        assert_eq!(
+            output.chars().count(),
+            separator.length_after_separate(&parts).unwrap()
+        );
     }
 
-    /// using for debug
-    mod internal {
-        use super::super::*;
+    #[test]
+    fn invalid_count_is_an_error() {
+        assert_eq!(
+            FixCountSeparator::new("-", 0).validate(),
+            Err(SeparatorError::ZeroCount)
+        );
+    }
 
-        #[test]
-        fn len_3() {
-            let s = FixCountSeparator::new("-", 1);
-            let data = vec!["1", "2", "3"];
-            let m = s.get_meta_inf(&data);
-            let ind = separator_indexes(&m);
-            assert_eq!(ind, vec![2])
+    #[test]
+    fn output_length_matches_rendered_length_for_short_and_long_inputs() {
+        for count in [1, 2, 4, 9] {
+            let separator = FixCountSeparator::new("::", count);
+            for input in ["a", "abc", "abcdef", "é🦀猫x"] {
+                let parts = [input];
+                assert_eq!(
+                    separator.separate(&parts).unwrap().chars().count(),
+                    separator.length_after_separate(&parts).unwrap()
+                );
+            }
         }
     }
 }

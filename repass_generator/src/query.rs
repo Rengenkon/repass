@@ -3,6 +3,22 @@ use crate::error::GeneratorError;
 use crate::query::Length::{Exact, Range};
 use crate::separator::Separator;
 
+/// Upper bounds for separator-shape enumeration and dictionary search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GenerationLimits {
+    pub max_shapes: usize,
+    pub max_planner_states: usize,
+}
+
+impl Default for GenerationLimits {
+    fn default() -> Self {
+        Self {
+            max_shapes: 100_000,
+            max_planner_states: 100_000,
+        }
+    }
+}
+
 pub enum Length {
     Range { min: usize, max: usize },
     Exact(usize),
@@ -27,17 +43,27 @@ impl Default for Length {
     }
 }
 
-pub struct Query<'a> {
+pub struct Query<'a, 'entries> {
     length: Length,
-    dictionary: &'a DictionaryCache<'a>,
+    dictionary: &'a DictionaryCache<'entries>,
     separator: &'a dyn Separator,
+    limits: GenerationLimits,
 }
 
-impl<'a> Query<'a> {
+impl<'a, 'entries> Query<'a, 'entries> {
     pub fn new(
         length: Length,
-        dictionary: &'a DictionaryCache<'a>,
+        dictionary: &'a DictionaryCache<'entries>,
         separator: &'a dyn Separator,
+    ) -> Result<Self, GeneratorError> {
+        Self::with_limits(length, dictionary, separator, GenerationLimits::default())
+    }
+
+    pub fn with_limits(
+        length: Length,
+        dictionary: &'a DictionaryCache<'entries>,
+        separator: &'a dyn Separator,
+        limits: GenerationLimits,
     ) -> Result<Self, GeneratorError> {
         length.validate()?;
         if dictionary.is_empty() {
@@ -50,6 +76,7 @@ impl<'a> Query<'a> {
             length,
             dictionary,
             separator,
+            limits,
         })
     }
 
@@ -57,12 +84,16 @@ impl<'a> Query<'a> {
         &self.length
     }
 
-    pub fn dictionary(&self) -> &'a DictionaryCache<'a> {
+    pub fn dictionary(&self) -> &'a DictionaryCache<'entries> {
         self.dictionary
     }
 
     pub fn separator(&self) -> &'a dyn Separator {
         self.separator
+    }
+
+    pub fn limits(&self) -> GenerationLimits {
+        self.limits
     }
 }
 
