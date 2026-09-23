@@ -6,8 +6,12 @@ pub enum GeneratorError {
     ZeroLength,
     EmptyDictionary,
     EmptyDictionaryEntry,
-    ImpossibleLength { target: usize },
+    InvalidDictionaryEntry { index: usize },
+    NoSeparationShape { target: usize },
+    NoDictionaryCombination { target: usize },
+    SeparatorLengthMismatch { expected: usize, actual: usize },
     ResourceLimit { target: usize },
+    SearchLimitExceeded { target: usize, limit: usize },
     InvalidSeparator(SeparatorError),
 }
 
@@ -30,15 +34,32 @@ impl Display for GeneratorError {
             Self::ZeroLength => write!(f, "password length must be greater than zero"),
             Self::EmptyDictionary => write!(f, "dictionary is empty"),
             Self::EmptyDictionaryEntry => write!(f, "dictionary entries must not be empty"),
-            Self::ImpossibleLength { target } => {
-                write!(f, "cannot generate a password of length {target}")
+            Self::InvalidDictionaryEntry { index } => {
+                write!(f, "dictionary does not provide an entry at index {index}")
             }
+            Self::NoSeparationShape { target } => {
+                write!(f, "separator cannot produce a result of length {target}")
+            }
+            Self::NoDictionaryCombination { target } => {
+                write!(
+                    f,
+                    "dictionary cannot form the content required for length {target}"
+                )
+            }
+            Self::SeparatorLengthMismatch { expected, actual } => write!(
+                f,
+                "separator produced length {actual}, but its requirement promised {expected}"
+            ),
             Self::ResourceLimit { target } => {
                 write!(
                     f,
                     "requested length {target} exceeds available generation resources"
                 )
             }
+            Self::SearchLimitExceeded { target, limit } => write!(
+                f,
+                "search for length {target} exceeded the limit of {limit} states; simplify the dictionary or target"
+            ),
             Self::InvalidSeparator(error) => Display::fmt(error, f),
         }
     }
