@@ -127,3 +127,14 @@ Before considering a change complete:
 5. Persisted-data compatibility was considered for storage changes.
 6. The final response briefly lists changed files, validation performed and any
    remaining limitations.
+
+## File permissions
+
+- Do not read a file unless the user has explicitly authorized reading that
+  file or one of its parent directories.
+- Do not modify a file unless the user has given explicit, clear authorization
+  to modify that specific file.
+- Authorization to inspect, analyze or read a file does not imply authorization
+  to modify it.
+- Authorization to modify one file does not imply authorization to modify
+  related, neighboring or parent files.
