@@ -13,12 +13,17 @@ pub enum Align {
 #[derive(Debug)]
 pub struct FixCountSeparator<'a> {
     separator: &'a str,
+    separator_length: usize,
     count: usize,
 }
 
 impl<'a> FixCountSeparator<'a> {
     pub fn new(separator: &'a str, count: usize) -> Self {
-        Self { separator, count }
+        Self {
+            separator,
+            separator_length: separator.chars().count(),
+            count,
+        }
     }
 }
 
@@ -26,6 +31,7 @@ impl Default for FixCountSeparator<'_> {
     fn default() -> Self {
         Self {
             separator: DEFAULT_SEPARATOR,
+            separator_length: DEFAULT_SEPARATOR.chars().count(),
             count: 3,
         }
     }
@@ -48,7 +54,7 @@ impl Separator for FixCountSeparator<'_> {
     ) -> Result<SeparationRequirement, SeparatorError> {
         self.validate()?;
         let Some(content_length) =
-            find_content_length(target_length, |length| self.output_length(length, 1))?
+            find_content_length(target_length, |length| self.output_length_validated(length))?
         else {
             return Ok(SeparationRequirement::Impossible { target_length });
         };
@@ -98,12 +104,16 @@ impl Separator for FixCountSeparator<'_> {
         _parts_count: usize,
     ) -> Result<usize, SeparatorError> {
         self.validate()?;
+        self.output_length_validated(input_length)
+    }
+}
+
+impl FixCountSeparator<'_> {
+    fn output_length_validated(&self, input_length: usize) -> Result<usize, SeparatorError> {
         let count = self.count.min(input_length.saturating_sub(1));
         input_length
             .checked_add(
-                self.separator
-                    .chars()
-                    .count()
+                self.separator_length
                     .checked_mul(count)
                     .ok_or(SeparatorError::LengthOverflow)?,
             )

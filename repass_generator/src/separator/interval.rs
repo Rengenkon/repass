@@ -7,6 +7,7 @@ use crate::error::SeparatorError;
 #[derive(Debug)]
 pub struct FixIntervalSeparator<'a> {
     separator: &'a str,
+    separator_length: usize,
     interval: usize,
 }
 
@@ -14,6 +15,7 @@ impl<'a> FixIntervalSeparator<'a> {
     pub fn new(separator: &'a str, interval: usize) -> Self {
         Self {
             separator,
+            separator_length: separator.chars().count(),
             interval,
         }
     }
@@ -23,6 +25,7 @@ impl Default for FixIntervalSeparator<'_> {
     fn default() -> Self {
         Self {
             separator: DEFAULT_SEPARATOR,
+            separator_length: DEFAULT_SEPARATOR.chars().count(),
             interval: 5,
         }
     }
@@ -45,7 +48,7 @@ impl Separator for FixIntervalSeparator<'_> {
     ) -> Result<SeparationRequirement, SeparatorError> {
         self.validate()?;
         let Some(content_length) =
-            find_content_length(target_length, |length| self.output_length(length, 1))?
+            find_content_length(target_length, |length| self.output_length_validated(length))?
         else {
             return Ok(SeparationRequirement::Impossible { target_length });
         };
@@ -87,12 +90,16 @@ impl Separator for FixIntervalSeparator<'_> {
         _parts_count: usize,
     ) -> Result<usize, SeparatorError> {
         self.validate()?;
+        self.output_length_validated(input_length)
+    }
+}
+
+impl FixIntervalSeparator<'_> {
+    fn output_length_validated(&self, input_length: usize) -> Result<usize, SeparatorError> {
         let count = input_length.saturating_sub(1) / self.interval;
         input_length
             .checked_add(
-                self.separator
-                    .chars()
-                    .count()
+                self.separator_length
                     .checked_mul(count)
                     .ok_or(SeparatorError::LengthOverflow)?,
             )

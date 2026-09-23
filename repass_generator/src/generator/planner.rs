@@ -12,7 +12,10 @@ pub(super) struct CombinationPlanner<'dictionary, 'entries> {
     visited: usize,
     max_states: usize,
     lengths_gcd: usize,
+    min_length: usize,
+    max_length: usize,
     stack: Vec<(usize, usize, usize)>,
+    viable_lengths: Vec<usize>,
 }
 
 impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
@@ -26,13 +29,18 @@ impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
             .copied()
             .reduce(gcd)
             .unwrap_or(0);
+        let min_length = dictionary.min_length();
+        let max_length = dictionary.available_lengths().last().copied().unwrap_or(0);
         Self {
             dictionary,
             failed: HashSet::new(),
             visited: 0,
             max_states: limits.max_planner_states,
             lengths_gcd,
+            min_length,
+            max_length,
             stack: Vec::new(),
+            viable_lengths: Vec::new(),
         }
     }
 
@@ -44,10 +52,11 @@ impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
         if shape.part_count == 0 || shape.content_length == 0 {
             return Ok(None);
         }
-        let min_length = self.dictionary.min_length();
-        let Some(&max_length) = self.dictionary.available_lengths().last() else {
+        let min_length = self.min_length;
+        let max_length = self.max_length;
+        if max_length == 0 {
             return Ok(None);
-        };
+        }
         let Some(min_required) = min_length.checked_mul(shape.part_count) else {
             return Ok(None);
         };
@@ -74,7 +83,7 @@ impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
                 target: shape.content_length,
             })?;
         while remaining_parts > 0 {
-            let mut viable_count = 0usize;
+            self.viable_lengths.clear();
             for &length in self.dictionary.available_lengths() {
                 if length > remaining_length {
                     break;
@@ -84,34 +93,13 @@ impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
                     remaining_parts - 1,
                     shape.content_length,
                 )? {
-                    viable_count += 1;
+                    self.viable_lengths.push(length);
                 }
             }
-            if viable_count == 0 {
+            if self.viable_lengths.is_empty() {
                 return Ok(None);
             }
-            let selected_length = rng.random_range(0..viable_count);
-            let mut viable_index = 0;
-            let mut selected_length_value = None;
-            for &length in self.dictionary.available_lengths() {
-                if length > remaining_length {
-                    break;
-                }
-                if self.can_complete(
-                    remaining_length - length,
-                    remaining_parts - 1,
-                    shape.content_length,
-                )? {
-                    if viable_index == selected_length {
-                        selected_length_value = Some(length);
-                        break;
-                    }
-                    viable_index += 1;
-                }
-            }
-            let Some(length) = selected_length_value else {
-                return Ok(None);
-            };
+            let length = self.viable_lengths[rng.random_range(0..self.viable_lengths.len())];
             let indexes = self.dictionary.entries_with_length(length);
             let Some(index) = indexes.get(rng.random_range(0..indexes.len())).copied() else {
                 return Ok(None);
@@ -129,10 +117,11 @@ impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
         remaining_parts: usize,
         target: usize,
     ) -> Result<bool, GeneratorError> {
-        let min_length = self.dictionary.min_length();
-        let Some(&max_length) = self.dictionary.available_lengths().last() else {
+        let min_length = self.min_length;
+        let max_length = self.max_length;
+        if max_length == 0 {
             return Ok(false);
-        };
+        }
         let lengths = self.dictionary.available_lengths();
         self.stack.clear();
         self.stack.push((remaining_length, remaining_parts, 0usize));

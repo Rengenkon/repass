@@ -3,7 +3,6 @@ pub mod error;
 pub mod generator;
 pub mod query;
 pub mod separator;
-pub mod utils;
 
 #[cfg(test)]
 mod tests {

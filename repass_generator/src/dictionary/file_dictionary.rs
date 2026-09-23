@@ -1,5 +1,6 @@
 use crate::dictionary::Dictionary;
 use crate::error::{DictionaryError, GeneratorError};
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
@@ -9,6 +10,7 @@ static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct FileDictionary {
     dictionary: Vec<String>,
+    known_entries: Option<HashSet<String>>,
 }
 
 impl FileDictionary {
@@ -29,7 +31,10 @@ impl FileDictionary {
                 dictionary.push(buf);
             }
         }
-        Ok(Self { dictionary })
+        Ok(Self {
+            dictionary,
+            known_entries: None,
+        })
     }
 
     pub fn from_entries<I, S>(entries: I) -> Result<Self, GeneratorError>
@@ -38,7 +43,10 @@ impl FileDictionary {
         S: Into<String>,
     {
         let dictionary = entries.into_iter().map(Into::into).collect();
-        let result = Self { dictionary };
+        let result = Self {
+            dictionary,
+            known_entries: None,
+        };
         result.validate()?;
         Ok(result)
     }
@@ -113,12 +121,73 @@ impl<'a> Dictionary<'a> for FileDictionary {
     }
 
     fn add(&mut self, values: &'a [&'a str]) -> Result<(), DictionaryError> {
-        super::validate_new_entries(self.dictionary.iter().map(String::as_str), values)?;
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        if let Some(known_entries) = &self.known_entries {
+            let mut incoming_entries = HashSet::new();
+            incoming_entries
+                .try_reserve(values.len())
+                .map_err(|_| DictionaryError::ResourceLimit)?;
+            for value in values {
+                if value.is_empty() {
+                    return Err(DictionaryError::EmptyEntry);
+                }
+                if known_entries.contains(*value) || !incoming_entries.insert(*value) {
+                    return Err(DictionaryError::DuplicateEntry((*value).to_owned()));
+                }
+            }
+
+            let new_len = self
+                .dictionary
+                .len()
+                .checked_add(values.len())
+                .ok_or(DictionaryError::ResourceLimit)?;
+            self.dictionary
+                .try_reserve(values.len())
+                .map_err(|_| DictionaryError::ResourceLimit)?;
+            if let Some(known_entries) = self.known_entries.as_mut() {
+                known_entries
+                    .try_reserve(values.len())
+                    .map_err(|_| DictionaryError::ResourceLimit)?;
+                for value in values {
+                    known_entries.insert((*value).to_owned());
+                    self.dictionary.push((*value).to_owned());
+                }
+            }
+            debug_assert_eq!(self.dictionary.len(), new_len);
+            return Ok(());
+        }
+
+        let mut known_entries = HashSet::new();
+        known_entries
+            .try_reserve(self.dictionary.len().saturating_add(values.len()))
+            .map_err(|_| DictionaryError::ResourceLimit)?;
+        for entry in &self.dictionary {
+            known_entries.insert(entry.clone());
+        }
+        let mut incoming_entries = HashSet::new();
+        incoming_entries
+            .try_reserve(values.len())
+            .map_err(|_| DictionaryError::ResourceLimit)?;
+        for value in values {
+            if value.is_empty() {
+                return Err(DictionaryError::EmptyEntry);
+            }
+            if !incoming_entries.insert(*value) || known_entries.contains(*value) {
+                return Err(DictionaryError::DuplicateEntry((*value).to_owned()));
+            }
+        }
+
         self.dictionary
             .try_reserve(values.len())
             .map_err(|_| DictionaryError::ResourceLimit)?;
-        self.dictionary
-            .extend(values.iter().map(|value| (*value).to_owned()));
+        for value in values {
+            known_entries.insert((*value).to_owned());
+            self.dictionary.push((*value).to_owned());
+        }
+        self.known_entries = Some(known_entries);
         Ok(())
     }
 
@@ -162,6 +231,7 @@ mod tests {
     #[test]
     fn add_rejects_existing_entries_without_partial_mutation() {
         let mut dictionary = FileDictionary::from_entries(["one", "two"]).unwrap();
+        assert!(dictionary.known_entries.is_none());
         assert_eq!(
             dictionary.add(&["three", "one"]),
             Err(crate::error::DictionaryError::DuplicateEntry(
@@ -169,8 +239,18 @@ mod tests {
             ))
         );
         assert_eq!(dictionary.len(), 2);
+        assert!(dictionary.known_entries.is_none());
         assert_eq!(dictionary.add(&["three", "four"]), Ok(()));
+        assert!(dictionary.known_entries.is_some());
         assert_eq!(dictionary.get(2), Some("three"));
+        assert_eq!(
+            dictionary.add(&["five", "three"]),
+            Err(crate::error::DictionaryError::DuplicateEntry(
+                "three".to_owned()
+            ))
+        );
+        assert_eq!(dictionary.len(), 4);
+        assert_eq!(dictionary.get(3), Some("four"));
     }
 
     #[test]

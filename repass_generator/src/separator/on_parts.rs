@@ -4,11 +4,15 @@ use crate::error::SeparatorError;
 #[derive(Debug)]
 pub struct BetweenPartsSeparator<'a> {
     separator: &'a str,
+    separator_length: usize,
 }
 
 impl<'a> BetweenPartsSeparator<'a> {
     pub fn new(separator: &'a str) -> Self {
-        Self { separator }
+        Self {
+            separator,
+            separator_length: separator.chars().count(),
+        }
     }
 }
 
@@ -16,6 +20,7 @@ impl Default for BetweenPartsSeparator<'_> {
     fn default() -> Self {
         Self {
             separator: DEFAULT_SEPARATOR,
+            separator_length: DEFAULT_SEPARATOR.chars().count(),
         }
     }
 }
@@ -34,13 +39,12 @@ impl Separator for BetweenPartsSeparator<'_> {
         target_length: usize,
     ) -> Result<SeparationRequirement, SeparatorError> {
         self.validate()?;
-        let separator_length = self.separator.chars().count();
         if target_length == 0 {
             return Ok(SeparationRequirement::Impossible { target_length });
         }
         Ok(SeparationRequirement::BetweenParts {
             target_length,
-            separator_length,
+            separator_length: self.separator_length,
         })
     }
 
@@ -70,9 +74,7 @@ impl Separator for BetweenPartsSeparator<'_> {
         self.validate()?;
         input_length
             .checked_add(
-                self.separator
-                    .chars()
-                    .count()
+                self.separator_length
                     .checked_mul(parts_count.saturating_sub(1))
                     .ok_or(SeparatorError::LengthOverflow)?,
             )

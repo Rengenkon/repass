@@ -1,5 +1,4 @@
 use crate::error::{DictionaryError, GeneratorError};
-use std::collections::HashSet;
 
 pub mod cache;
 pub mod file_dictionary;
@@ -48,20 +47,4 @@ impl<'a, T: Dictionary<'a> + ?Sized> Dictionary<'a> for Box<T> {
         let dictionary: &T = &**self;
         dictionary.len()
     }
-}
-
-pub(crate) fn validate_new_entries<'a>(
-    existing: impl IntoIterator<Item = &'a str>,
-    values: &[&str],
-) -> Result<(), DictionaryError> {
-    let mut seen: HashSet<&str> = existing.into_iter().collect();
-    for value in values {
-        if value.is_empty() {
-            return Err(DictionaryError::EmptyEntry);
-        }
-        if !seen.insert(value) {
-            return Err(DictionaryError::DuplicateEntry((*value).to_owned()));
-        }
-    }
-    Ok(())
 }
