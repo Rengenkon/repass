@@ -1,8 +1,9 @@
-pub mod query;
+pub mod dictionary;
+pub mod error;
 pub mod generator;
+pub mod query;
 pub mod separator;
 pub mod utils;
-pub mod dictionary;
 
 #[cfg(test)]
 mod tests {
@@ -17,8 +18,7 @@ mod tests {
         let separator = FixIntervalSeparator::default();
         let length = Length::default();
         let query = Query::new(length, &dictionary, &separator);
-        let password = generate_once(&query);
-        println!("{}", password);
-        assert!(!password.is_empty())
+        let password = generate_once(&query).unwrap();
+        assert!((12..=20).contains(&password.chars().count()));
     }
 }
