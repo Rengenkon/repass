@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+argon2 = "0.5"
+cobs = "0.3"
 frizbee = "0.13.0"
 repass_generator = { path = "../repass_generator" }
 postcard = { version = "1.1", features = ["alloc"] }
 chacha20poly1305 = "0.11.0"
+rand = "0.10.2"
 serde = { version = "1.0.229", features = ["derive"] }
