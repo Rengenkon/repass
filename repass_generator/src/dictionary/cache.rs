@@ -2,14 +2,14 @@ use crate::dictionary::Dictionary;
 use crate::error::GeneratorError;
 use std::collections::HashMap;
 
-/// Owns an immutable dictionary and an index from Unicode scalar length to
+/// Owns an immutable dictionary and an index from Unicode scalar-value count to
 /// dictionary positions. Implementations must not mutate their contents through
 /// interior mutability after being moved into this cache.
 pub struct DictionaryCache<'a> {
     dictionary: Box<dyn Dictionary<'a> + 'a>,
-    by_length: HashMap<usize, Vec<usize>>,
-    available_lengths: Vec<usize>,
-    min_length: usize,
+    by_entry_chars: HashMap<usize, Vec<usize>>,
+    available_entry_chars: Vec<usize>,
+    min_entry_chars: usize,
 }
 
 impl<'a> DictionaryCache<'a> {
@@ -18,28 +18,28 @@ impl<'a> DictionaryCache<'a> {
         D: Dictionary<'a> + 'a,
     {
         dictionary.validate()?;
-        let mut by_length: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut by_entry_chars: HashMap<usize, Vec<usize>> = HashMap::new();
         for index in 0..dictionary.len() {
             let entry = dictionary
-                .get(index)
+                .entry(index)
                 .ok_or(GeneratorError::InvalidDictionaryEntry { index })?;
-            let length = entry.chars().count();
-            if length == 0 {
+            let entry_chars = entry.chars().count();
+            if entry_chars == 0 {
                 return Err(GeneratorError::EmptyDictionaryEntry);
             }
-            by_length.entry(length).or_default().push(index);
+            by_entry_chars.entry(entry_chars).or_default().push(index);
         }
-        let mut available_lengths: Vec<_> = by_length.keys().copied().collect();
-        available_lengths.sort_unstable();
-        let min_length = *available_lengths
+        let mut available_entry_chars: Vec<_> = by_entry_chars.keys().copied().collect();
+        available_entry_chars.sort_unstable();
+        let min_entry_chars = *available_entry_chars
             .first()
             .ok_or(GeneratorError::EmptyDictionary)?;
 
         Ok(Self {
             dictionary: Box::new(dictionary),
-            by_length,
-            available_lengths,
-            min_length,
+            by_entry_chars,
+            available_entry_chars,
+            min_entry_chars,
         })
     }
 
@@ -52,19 +52,21 @@ impl<'a> DictionaryCache<'a> {
     }
 
     pub fn entry(&self, index: usize) -> Option<&str> {
-        self.dictionary.get(index)
+        self.dictionary.entry(index)
     }
 
-    pub fn entries_with_length(&self, length: usize) -> &[usize] {
-        self.by_length.get(&length).map_or(&[], Vec::as_slice)
+    pub fn entries_with_chars(&self, entry_chars: usize) -> &[usize] {
+        self.by_entry_chars
+            .get(&entry_chars)
+            .map_or(&[], Vec::as_slice)
     }
 
-    pub fn available_lengths(&self) -> &[usize] {
-        &self.available_lengths
+    pub fn available_entry_chars(&self) -> &[usize] {
+        &self.available_entry_chars
     }
 
-    pub fn min_length(&self) -> usize {
-        self.min_length
+    pub fn min_entry_chars(&self) -> usize {
+        self.min_entry_chars
     }
 
     pub fn into_dictionary(self) -> Box<dyn Dictionary<'a> + 'a> {
@@ -78,15 +80,15 @@ mod tests {
     use crate::dictionary::file_dictionary::FileDictionary;
 
     #[test]
-    fn indexes_unicode_scalar_lengths_without_copying_entries() {
+    fn indexes_entries_by_unicode_scalar_count_without_copying_entries() {
         let dictionary = FileDictionary::from_entries(["a", "猫", "xy", "é"]).unwrap();
         let cache = DictionaryCache::new(dictionary).unwrap();
 
-        assert_eq!(cache.entries_with_length(1), &[0, 1, 3]);
-        assert_eq!(cache.entries_with_length(2), &[2]);
+        assert_eq!(cache.entries_with_chars(1), &[0, 1, 3]);
+        assert_eq!(cache.entries_with_chars(2), &[2]);
         assert_eq!(cache.entry(1), Some("猫"));
-        assert_eq!(cache.available_lengths(), &[1, 2]);
-        assert_eq!(cache.min_length(), 1);
+        assert_eq!(cache.available_entry_chars(), &[1, 2]);
+        assert_eq!(cache.min_entry_chars(), 1);
     }
 
     #[test]
@@ -107,6 +109,6 @@ mod tests {
         dictionary.add(&SECOND).unwrap();
         let rebuilt = DictionaryCache::new(dictionary).unwrap();
         assert_eq!(rebuilt.entry(1), Some("second"));
-        assert_eq!(rebuilt.entries_with_length(6), &[1]);
+        assert_eq!(rebuilt.entries_with_chars(6), &[1]);
     }
 }

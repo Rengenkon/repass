@@ -1,6 +1,6 @@
 use crate::dictionary::cache::DictionaryCache;
 use crate::error::GeneratorError;
-use crate::query::Length::{Exact, Range};
+use crate::query::PasswordLength::{Exact, Range};
 use crate::separator::Separator;
 
 /// Upper bounds for separator-shape enumeration and dictionary search.
@@ -36,32 +36,38 @@ impl Default for GenerationLimits {
     }
 }
 
-pub enum Length {
-    Range { min: usize, max: usize },
+pub enum PasswordLength {
+    Range { min_chars: usize, max_chars: usize },
     Exact(usize),
 }
 
-impl Length {
+impl PasswordLength {
     pub fn validate(&self) -> Result<(), GeneratorError> {
         match self {
-            Range { min, max } if min > max => Err(GeneratorError::InvalidLengthRange {
-                min: *min,
-                max: *max,
+            Range {
+                min_chars,
+                max_chars,
+            } if min_chars > max_chars => Err(GeneratorError::InvalidPasswordLengthRange {
+                min_chars: *min_chars,
+                max_chars: *max_chars,
             }),
-            Range { min: 0, .. } | Exact(0) => Err(GeneratorError::ZeroLength),
+            Range { min_chars: 0, .. } | Exact(0) => Err(GeneratorError::ZeroPasswordLength),
             _ => Ok(()),
         }
     }
 }
 
-impl Default for Length {
+impl Default for PasswordLength {
     fn default() -> Self {
-        Range { min: 12, max: 20 }
+        Range {
+            min_chars: 12,
+            max_chars: 20,
+        }
     }
 }
 
 pub struct Query<'a, 'entries> {
-    length: Length,
+    password_length: PasswordLength,
     dictionary: &'a DictionaryCache<'entries>,
     separator: &'a dyn Separator,
     limits: GenerationLimits,
@@ -69,20 +75,25 @@ pub struct Query<'a, 'entries> {
 
 impl<'a, 'entries> Query<'a, 'entries> {
     pub fn new(
-        length: Length,
+        password_length: PasswordLength,
         dictionary: &'a DictionaryCache<'entries>,
         separator: &'a dyn Separator,
     ) -> Result<Self, GeneratorError> {
-        Self::with_limits(length, dictionary, separator, GenerationLimits::default())
+        Self::with_limits(
+            password_length,
+            dictionary,
+            separator,
+            GenerationLimits::default(),
+        )
     }
 
     pub fn with_limits(
-        length: Length,
+        password_length: PasswordLength,
         dictionary: &'a DictionaryCache<'entries>,
         separator: &'a dyn Separator,
         limits: GenerationLimits,
     ) -> Result<Self, GeneratorError> {
-        length.validate()?;
+        password_length.validate()?;
         if dictionary.is_empty() {
             return Err(GeneratorError::EmptyDictionary);
         }
@@ -90,15 +101,15 @@ impl<'a, 'entries> Query<'a, 'entries> {
             .validate()
             .map_err(GeneratorError::InvalidSeparator)?;
         Ok(Query {
-            length,
+            password_length,
             dictionary,
             separator,
             limits,
         })
     }
 
-    pub fn length(&self) -> &Length {
-        &self.length
+    pub fn password_length(&self) -> &PasswordLength {
+        &self.password_length
     }
 
     pub fn dictionary(&self) -> &'a DictionaryCache<'entries> {
@@ -116,22 +127,32 @@ impl<'a, 'entries> Query<'a, 'entries> {
 
 #[cfg(test)]
 mod test {
-    use crate::query::Length::{Exact, Range};
+    use crate::query::PasswordLength::{Exact, Range};
 
     #[test]
-    fn hard() {
-        let l = Exact(3);
-        assert_eq!(l.validate(), Ok(()));
+    fn accepts_exact_password_char_count() {
+        let password_length = Exact(3);
+        assert_eq!(password_length.validate(), Ok(()));
     }
 
     #[test]
-    fn float() {
-        let l = Range { min: 12, max: 20 };
-        assert_eq!(l.validate(), Ok(()));
+    fn accepts_valid_password_char_count_range() {
+        let password_length = Range {
+            min_chars: 12,
+            max_chars: 20,
+        };
+        assert_eq!(password_length.validate(), Ok(()));
     }
 
     #[test]
     fn rejects_invalid_range() {
-        assert!(Range { min: 9, max: 3 }.validate().is_err());
+        assert!(
+            Range {
+                min_chars: 9,
+                max_chars: 3,
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

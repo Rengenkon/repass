@@ -115,7 +115,7 @@ impl FileDictionary {
 }
 
 impl<'a> Dictionary<'a> for FileDictionary {
-    fn get(&self, index: usize) -> Option<&str> {
+    fn entry(&self, index: usize) -> Option<&str> {
         let x = self.dictionary.get(index)?;
         Some(x.as_str())
     }
@@ -214,8 +214,8 @@ mod tests {
     #[test]
     fn keeps_unicode_entries() {
         let dictionary = FileDictionary::from_entries(["é", "word"]).unwrap();
-        assert_eq!(dictionary.get(0), Some("é"));
-        assert_eq!(dictionary.get(1), Some("word"));
+        assert_eq!(dictionary.entry(0), Some("é"));
+        assert_eq!(dictionary.entry(1), Some("word"));
     }
 
     #[test]
@@ -242,7 +242,7 @@ mod tests {
         assert!(dictionary.known_entries.is_none());
         assert_eq!(dictionary.add(&["three", "four"]), Ok(()));
         assert!(dictionary.known_entries.is_some());
-        assert_eq!(dictionary.get(2), Some("three"));
+        assert_eq!(dictionary.entry(2), Some("three"));
         assert_eq!(
             dictionary.add(&["five", "three"]),
             Err(crate::error::DictionaryError::DuplicateEntry(
@@ -250,7 +250,7 @@ mod tests {
             ))
         );
         assert_eq!(dictionary.len(), 4);
-        assert_eq!(dictionary.get(3), Some("four"));
+        assert_eq!(dictionary.entry(3), Some("four"));
     }
 
     #[test]
@@ -259,8 +259,8 @@ mod tests {
         std::fs::write(&path, "alpha\r\nbeta\n").unwrap();
         let dictionary = FileDictionary::from_path(&path).unwrap();
         let _ = std::fs::remove_file(&path);
-        assert_eq!(dictionary.get(0), Some("alpha"));
-        assert_eq!(dictionary.get(1), Some("beta"));
+        assert_eq!(dictionary.entry(0), Some("alpha"));
+        assert_eq!(dictionary.entry(1), Some("beta"));
     }
 
     #[test]
@@ -274,9 +274,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         assert_eq!(loaded.len(), 3);
-        assert_eq!(loaded.get(0), Some("abc"));
-        assert_eq!(loaded.get(1), Some("猫"));
-        assert_eq!(loaded.get(2), Some("🦀"));
+        assert_eq!(loaded.entry(0), Some("abc"));
+        assert_eq!(loaded.entry(1), Some("猫"));
+        assert_eq!(loaded.entry(2), Some("🦀"));
     }
 
     #[test]

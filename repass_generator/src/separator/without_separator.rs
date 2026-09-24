@@ -15,18 +15,18 @@ impl Separator for WithoutSeparator {
         Ok(())
     }
 
-    fn requirement_for(
+    fn requirement_for_output(
         &self,
-        target_length: usize,
+        target_chars: usize,
     ) -> Result<SeparationRequirement, SeparatorError> {
-        if target_length == 0 {
-            return Ok(SeparationRequirement::Impossible { target_length });
+        if target_chars == 0 {
+            return Ok(SeparationRequirement::Impossible { target_chars });
         }
         Ok(SeparationRequirement::FixedContent {
-            content_length: target_length,
+            content_chars: target_chars,
             part_count: PartCount::Range {
                 min: 1,
-                max: target_length,
+                max: target_chars,
             },
         })
     }
@@ -45,12 +45,12 @@ impl Separator for WithoutSeparator {
         Ok(())
     }
 
-    fn output_length(
+    fn output_chars(
         &self,
-        input_length: usize,
-        _parts_count: usize,
+        content_chars: usize,
+        _part_count: usize,
     ) -> Result<usize, SeparatorError> {
-        Ok(input_length)
+        Ok(content_chars)
     }
 }
 
@@ -62,7 +62,7 @@ mod tests {
     fn joins_unicode_parts_without_changing_content() {
         let separator = WithoutSeparator;
         assert_eq!(separator.separate(&["é", "🦀"]).unwrap(), "é🦀");
-        assert_eq!(separator.length_after_separate(&["é", "🦀"]).unwrap(), 2);
+        assert_eq!(separator.separated_chars(&["é", "🦀"]).unwrap(), 2);
     }
 
     #[test]

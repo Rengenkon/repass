@@ -1,62 +1,63 @@
 use super::{
-    DEFAULT_SEPARATOR, PartCount, SeparationRequirement, Separator, find_content_length,
+    DEFAULT_SEPARATOR, PartCount, SeparationRequirement, Separator, find_content_chars,
     validate_parts,
 };
 use crate::error::SeparatorError;
 
 #[derive(Debug)]
-pub struct FixIntervalSeparator<'a> {
+pub struct FixedIntervalSeparator<'a> {
     separator: &'a str,
-    separator_length: usize,
-    interval: usize,
+    separator_chars: usize,
+    interval_chars: usize,
 }
 
-impl<'a> FixIntervalSeparator<'a> {
-    pub fn new(separator: &'a str, interval: usize) -> Self {
+impl<'a> FixedIntervalSeparator<'a> {
+    pub fn new(separator: &'a str, interval_chars: usize) -> Self {
         Self {
             separator,
-            separator_length: separator.chars().count(),
-            interval,
+            separator_chars: separator.chars().count(),
+            interval_chars,
         }
     }
 }
 
-impl Default for FixIntervalSeparator<'_> {
+impl Default for FixedIntervalSeparator<'_> {
     fn default() -> Self {
         Self {
             separator: DEFAULT_SEPARATOR,
-            separator_length: DEFAULT_SEPARATOR.chars().count(),
-            interval: 5,
+            separator_chars: DEFAULT_SEPARATOR.chars().count(),
+            interval_chars: 5,
         }
     }
 }
 
-impl Separator for FixIntervalSeparator<'_> {
+impl Separator for FixedIntervalSeparator<'_> {
     fn validate(&self) -> Result<(), SeparatorError> {
         if self.separator.is_empty() {
             return Err(SeparatorError::EmptySeparator);
         }
-        if self.interval == 0 {
+        if self.interval_chars == 0 {
             return Err(SeparatorError::ZeroInterval);
         }
         Ok(())
     }
 
-    fn requirement_for(
+    fn requirement_for_output(
         &self,
-        target_length: usize,
+        target_chars: usize,
     ) -> Result<SeparationRequirement, SeparatorError> {
         self.validate()?;
-        let Some(content_length) =
-            find_content_length(target_length, |length| self.output_length_validated(length))?
+        let Some(content_chars) = find_content_chars(target_chars, |content_chars| {
+            self.output_chars_validated(content_chars)
+        })?
         else {
-            return Ok(SeparationRequirement::Impossible { target_length });
+            return Ok(SeparationRequirement::Impossible { target_chars });
         };
         Ok(SeparationRequirement::FixedContent {
-            content_length,
+            content_chars,
             part_count: PartCount::Range {
                 min: 1,
-                max: content_length,
+                max: content_chars,
             },
         })
     }
@@ -70,13 +71,13 @@ impl Separator for FixIntervalSeparator<'_> {
     fn write_separated(&self, parts: &[&str], output: &mut String) -> Result<(), SeparatorError> {
         self.validate()?;
         validate_parts(parts)?;
-        let content_length = super::get_summary_length(parts);
+        let content_chars = super::content_chars_of(parts);
         let mut consumed = 0usize;
         for part in parts {
             for ch in part.chars() {
                 output.push(ch);
                 consumed += 1;
-                if consumed % self.interval == 0 && consumed < content_length {
+                if consumed % self.interval_chars == 0 && consumed < content_chars {
                     output.push_str(self.separator);
                 }
             }
@@ -84,26 +85,26 @@ impl Separator for FixIntervalSeparator<'_> {
         Ok(())
     }
 
-    fn output_length(
+    fn output_chars(
         &self,
-        input_length: usize,
-        _parts_count: usize,
+        content_chars: usize,
+        _part_count: usize,
     ) -> Result<usize, SeparatorError> {
         self.validate()?;
-        self.output_length_validated(input_length)
+        self.output_chars_validated(content_chars)
     }
 }
 
-impl FixIntervalSeparator<'_> {
-    fn output_length_validated(&self, input_length: usize) -> Result<usize, SeparatorError> {
-        let count = input_length.saturating_sub(1) / self.interval;
-        input_length
+impl FixedIntervalSeparator<'_> {
+    fn output_chars_validated(&self, content_chars: usize) -> Result<usize, SeparatorError> {
+        let count = content_chars.saturating_sub(1) / self.interval_chars;
+        content_chars
             .checked_add(
-                self.separator_length
+                self.separator_chars
                     .checked_mul(count)
-                    .ok_or(SeparatorError::LengthOverflow)?,
+                    .ok_or(SeparatorError::CharacterCountOverflow)?,
             )
-            .ok_or(SeparatorError::LengthOverflow)
+            .ok_or(SeparatorError::CharacterCountOverflow)
     }
 }
 
@@ -113,33 +114,33 @@ mod tests {
 
     #[test]
     fn inserts_at_unicode_scalar_boundaries() {
-        let separator = FixIntervalSeparator::new("🟠", 2);
+        let separator = FixedIntervalSeparator::new("🟠", 2);
         let parts = ["é🦀", "猫x"];
         let result = separator.separate(&parts).unwrap();
         assert_eq!(result, "é🦀🟠猫x");
         assert_eq!(
             result.chars().count(),
-            separator.length_after_separate(&parts).unwrap()
+            separator.separated_chars(&parts).unwrap()
         );
     }
 
     #[test]
     fn invalid_interval_is_reported() {
         assert_eq!(
-            FixIntervalSeparator::new("-", 0).validate(),
+            FixedIntervalSeparator::new("-", 0).validate(),
             Err(SeparatorError::ZeroInterval)
         );
     }
 
     #[test]
-    fn output_length_matches_rendered_length_across_boundaries() {
+    fn output_chars_matches_rendered_output_across_boundaries() {
         for interval in [1, 2, 3, 5] {
-            let separator = FixIntervalSeparator::new("::", interval);
+            let separator = FixedIntervalSeparator::new("::", interval);
             for input in ["a", "abc", "abcdef", "é🦀猫x"] {
                 let parts = [input];
                 assert_eq!(
                     separator.separate(&parts).unwrap().chars().count(),
-                    separator.length_after_separate(&parts).unwrap()
+                    separator.separated_chars(&parts).unwrap()
                 );
             }
         }
@@ -147,7 +148,7 @@ mod tests {
 
     #[test]
     fn writes_into_existing_buffer_without_replacing_prefix() {
-        let separator = FixIntervalSeparator::new("-", 2);
+        let separator = FixedIntervalSeparator::new("-", 2);
         let mut output = String::from("prefix:");
         separator.write_separated(&["abcd"], &mut output).unwrap();
         assert_eq!(output, "prefix:ab-cd");

@@ -2,23 +2,29 @@ mod planner;
 
 use crate::dictionary::cache::DictionaryCache;
 use crate::error::GeneratorError;
-use crate::query::{GenerationLimits, Length, Query};
+use crate::query::{GenerationLimits, PasswordLength, Query};
 use crate::separator::Separator;
 use rand::{Rng, RngExt};
 
-fn choose_target(length: &Length, rng: &mut impl Rng) -> Result<usize, GeneratorError> {
-    length.validate()?;
-    let target = match length {
-        Length::Exact(value) => *value,
-        Length::Range { min, max } => rng.random_range(*min..=*max),
+fn choose_target_chars(
+    password_length: &PasswordLength,
+    rng: &mut impl Rng,
+) -> Result<usize, GeneratorError> {
+    password_length.validate()?;
+    let target_chars = match password_length {
+        PasswordLength::Exact(value) => *value,
+        PasswordLength::Range {
+            min_chars,
+            max_chars,
+        } => rng.random_range(*min_chars..=*max_chars),
     };
-    Ok(target)
+    Ok(target_chars)
 }
 
-fn generate_for_target(
+fn generate_for_target_chars(
     dictionary: &DictionaryCache<'_>,
     separator: &dyn Separator,
-    target: usize,
+    target_chars: usize,
     rng: &mut impl Rng,
     limits: GenerationLimits,
 ) -> Result<String, GeneratorError> {
@@ -26,7 +32,7 @@ fn generate_for_target(
         .validate()
         .map_err(GeneratorError::InvalidSeparator)?;
     let mut shapes = separator
-        .inputs_for_total(target)
+        .shapes_for_output(target_chars)
         .map_err(GeneratorError::InvalidSeparator)?;
     let mut planner = planner::CombinationPlanner::new(dictionary, limits);
     let mut found_shape = false;
@@ -36,18 +42,18 @@ fn generate_for_target(
         };
         if shape_index == limits.max_shapes() {
             return Err(GeneratorError::SearchLimitExceeded {
-                target,
+                target_chars,
                 limit: limits.max_shapes(),
             });
         }
         found_shape = true;
-        let Some(plan) = planner.find_plan(shape, rng)? else {
+        let Some(plan) = planner.find_combination(shape, rng)? else {
             continue;
         };
         let mut parts = Vec::new();
         parts
             .try_reserve_exact(plan.len())
-            .map_err(|_| GeneratorError::ResourceLimit { target })?;
+            .map_err(|_| GeneratorError::ResourceLimit { target_chars })?;
         for index in plan {
             parts.push(
                 dictionary
@@ -58,23 +64,23 @@ fn generate_for_target(
         let output = separator
             .separate(&parts)
             .map_err(GeneratorError::InvalidSeparator)?;
-        let actual = output.chars().count();
-        if actual != target {
-            return Err(GeneratorError::SeparatorLengthMismatch {
-                expected: target,
-                actual,
+        let actual_chars = output.chars().count();
+        if actual_chars != target_chars {
+            return Err(GeneratorError::SeparatorCharacterCountMismatch {
+                expected_chars: target_chars,
+                actual_chars,
             });
         }
         return Ok(output);
     }
     if found_shape {
-        Err(GeneratorError::NoDictionaryCombination { target })
+        Err(GeneratorError::NoDictionaryCombination { target_chars })
     } else {
-        Err(GeneratorError::NoSeparationShape { target })
+        Err(GeneratorError::NoSeparationShape { target_chars })
     }
 }
 
-/// Generate one password. Length means Unicode scalar values, not bytes.
+/// Generate one password. Its character count is measured in Unicode scalar values, not bytes.
 pub fn generate_once(query: &Query) -> Result<String, GeneratorError> {
     let mut rng = rand::rng();
     generate_once_with_rng(query, &mut rng)
@@ -82,11 +88,11 @@ pub fn generate_once(query: &Query) -> Result<String, GeneratorError> {
 
 /// Deterministic injection point for callers and tests that provide their own RNG.
 pub fn generate_once_with_rng(query: &Query, rng: &mut impl Rng) -> Result<String, GeneratorError> {
-    let target = choose_target(query.length(), rng)?;
-    generate_for_target(
+    let target_chars = choose_target_chars(query.password_length(), rng)?;
+    generate_for_target_chars(
         query.dictionary(),
         query.separator(),
-        target,
+        target_chars,
         rng,
         query.limits(),
     )
@@ -111,44 +117,44 @@ pub fn generate_multi_with_rng(
 mod tests {
     use super::*;
     use crate::dictionary::{cache::DictionaryCache, file_dictionary::FileDictionary};
-    use crate::query::Length;
-    use crate::separator::no_split::WithoutSeparator;
+    use crate::query::PasswordLength;
+    use crate::separator::without_separator::WithoutSeparator;
     use crate::separator::{
-        fix_count::FixCountSeparator, interval::FixIntervalSeparator,
-        on_parts::BetweenPartsSeparator,
+        between_parts::BetweenPartsSeparator, fixed_count::FixedCountSeparator,
+        fixed_interval::FixedIntervalSeparator,
     };
     use rand::{SeedableRng, rngs::StdRng};
 
     #[test]
-    fn generates_exact_unicode_length_with_multichar_entries() {
+    fn generates_exact_unicode_char_count_with_multichar_entries() {
         let dictionary =
             DictionaryCache::new(FileDictionary::from_entries(["é", "🦀", "猫"]).unwrap()).unwrap();
         let separator = WithoutSeparator;
-        let query = Query::new(Length::Exact(7), &dictionary, &separator).unwrap();
+        let query = Query::new(PasswordLength::Exact(7), &dictionary, &separator).unwrap();
         let mut rng = StdRng::seed_from_u64(7);
         let password = generate_once_with_rng(&query, &mut rng).unwrap();
         assert_eq!(password.chars().count(), 7);
     }
 
     #[test]
-    fn impossible_length_is_reported_without_retrying_forever() {
+    fn impossible_char_count_is_reported_without_retrying_forever() {
         let dictionary =
             DictionaryCache::new(FileDictionary::from_entries(["ab"]).unwrap()).unwrap();
         let separator = WithoutSeparator;
-        let query = Query::new(Length::Exact(3), &dictionary, &separator).unwrap();
+        let query = Query::new(PasswordLength::Exact(3), &dictionary, &separator).unwrap();
         let mut rng = StdRng::seed_from_u64(1);
         assert_eq!(
             generate_once_with_rng(&query, &mut rng),
-            Err(GeneratorError::NoDictionaryCombination { target: 3 })
+            Err(GeneratorError::NoDictionaryCombination { target_chars: 3 })
         );
     }
 
     #[test]
-    fn query_rejects_invalid_length_before_generation() {
+    fn query_rejects_invalid_password_char_count_before_generation() {
         let dictionary =
             DictionaryCache::new(FileDictionary::from_entries(["x"]).unwrap()).unwrap();
         let separator = WithoutSeparator;
-        assert!(Query::new(Length::Exact(0), &dictionary, &separator).is_err());
+        assert!(Query::new(PasswordLength::Exact(0), &dictionary, &separator).is_err());
     }
 
     #[test]
@@ -156,7 +162,7 @@ mod tests {
         let dictionary =
             DictionaryCache::new(FileDictionary::from_entries(["x"]).unwrap()).unwrap();
         let separator = WithoutSeparator;
-        let query = Query::new(Length::Exact(2), &dictionary, &separator).unwrap();
+        let query = Query::new(PasswordLength::Exact(2), &dictionary, &separator).unwrap();
         let mut rng = StdRng::seed_from_u64(1);
         assert!(
             generate_multi_with_rng(&query, 0, &mut rng)
@@ -166,17 +172,17 @@ mod tests {
     }
 
     #[test]
-    fn exact_length_is_respected_for_each_separator_strategy() {
+    fn exact_char_count_is_respected_for_each_separator_strategy() {
         let dictionary =
             DictionaryCache::new(FileDictionary::from_entries(["a", "é", "xy"]).unwrap()).unwrap();
         let separators: [&dyn Separator; 4] = [
             &WithoutSeparator,
             &BetweenPartsSeparator::new("--"),
-            &FixIntervalSeparator::new("🟠", 3),
-            &FixCountSeparator::new("::", 2),
+            &FixedIntervalSeparator::new("🟠", 3),
+            &FixedCountSeparator::new("::", 2),
         ];
         for (index, separator) in separators.into_iter().enumerate() {
-            let query = Query::new(Length::Exact(13), &dictionary, separator).unwrap();
+            let query = Query::new(PasswordLength::Exact(13), &dictionary, separator).unwrap();
             let mut rng = StdRng::seed_from_u64(13);
             let result = generate_once_with_rng(&query, &mut rng)
                 .unwrap_or_else(|error| panic!("separator {index}: {error}"));

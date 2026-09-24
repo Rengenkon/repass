@@ -4,14 +4,14 @@ use crate::error::SeparatorError;
 #[derive(Debug)]
 pub struct BetweenPartsSeparator<'a> {
     separator: &'a str,
-    separator_length: usize,
+    separator_chars: usize,
 }
 
 impl<'a> BetweenPartsSeparator<'a> {
     pub fn new(separator: &'a str) -> Self {
         Self {
             separator,
-            separator_length: separator.chars().count(),
+            separator_chars: separator.chars().count(),
         }
     }
 }
@@ -20,7 +20,7 @@ impl Default for BetweenPartsSeparator<'_> {
     fn default() -> Self {
         Self {
             separator: DEFAULT_SEPARATOR,
-            separator_length: DEFAULT_SEPARATOR.chars().count(),
+            separator_chars: DEFAULT_SEPARATOR.chars().count(),
         }
     }
 }
@@ -34,17 +34,17 @@ impl Separator for BetweenPartsSeparator<'_> {
         }
     }
 
-    fn requirement_for(
+    fn requirement_for_output(
         &self,
-        target_length: usize,
+        target_chars: usize,
     ) -> Result<SeparationRequirement, SeparatorError> {
         self.validate()?;
-        if target_length == 0 {
-            return Ok(SeparationRequirement::Impossible { target_length });
+        if target_chars == 0 {
+            return Ok(SeparationRequirement::Impossible { target_chars });
         }
         Ok(SeparationRequirement::BetweenParts {
-            target_length,
-            separator_length: self.separator_length,
+            target_chars,
+            separator_chars: self.separator_chars,
         })
     }
 
@@ -66,19 +66,19 @@ impl Separator for BetweenPartsSeparator<'_> {
         Ok(())
     }
 
-    fn output_length(
+    fn output_chars(
         &self,
-        input_length: usize,
-        parts_count: usize,
+        content_chars: usize,
+        part_count: usize,
     ) -> Result<usize, SeparatorError> {
         self.validate()?;
-        input_length
+        content_chars
             .checked_add(
-                self.separator_length
-                    .checked_mul(parts_count.saturating_sub(1))
-                    .ok_or(SeparatorError::LengthOverflow)?,
+                self.separator_chars
+                    .checked_mul(part_count.saturating_sub(1))
+                    .ok_or(SeparatorError::CharacterCountOverflow)?,
             )
-            .ok_or(SeparatorError::LengthOverflow)
+            .ok_or(SeparatorError::CharacterCountOverflow)
     }
 }
 
@@ -87,11 +87,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn computes_between_part_length_for_multichar_separator() {
+    fn computes_between_part_chars_for_multichar_separator() {
         let separator = BetweenPartsSeparator::new("🟠-");
         let parts = ["猫", "é"];
         assert_eq!(separator.separate(&parts).unwrap(), "猫🟠-é");
-        assert_eq!(separator.length_after_separate(&parts).unwrap(), 4);
+        assert_eq!(separator.separated_chars(&parts).unwrap(), 4);
     }
 
     #[test]
