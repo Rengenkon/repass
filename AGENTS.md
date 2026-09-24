@@ -15,11 +15,28 @@ Keep the project understandable and small. Do not introduce enterprise-scale
 architecture, networking, accounts, synchronization or UI frameworks unless
 the user explicitly requests them.
 
+## Instruction precedence
+
+Apply instructions in the following order:
+
+1. System and platform instructions.
+2. User instructions for the current task.
+3. This `AGENTS.md` file.
+4. General conventions and personal preferences.
+
+When instructions conflict, follow the higher-priority instruction and mention
+the conflict in the final response if it affects the result.
+
 ## Working rules
+
+Rules using “must”, “do not” or “never” are mandatory. Rules using “prefer” or
+“avoid” are recommendations and may be overridden when the task requires it.
 
 - Inspect the relevant code, tests and git diff before changing files.
 - Preserve user changes. Do not reset, discard or overwrite unrelated work.
 - Make focused changes; avoid unrelated cleanup and broad refactors.
+- Do not chain shell commands with `&&`, `;` or other command separators. Run
+  each command in a separate shell invocation.
 - Prefer a simple implementation that matches the existing design over a new
   abstraction introduced speculatively.
 - Explain significant architectural or format changes in the final response.
@@ -125,8 +142,9 @@ Before considering a change complete:
 3. Relevant tests were added or updated.
 4. Formatting and checks were run, or failures are reported explicitly.
 5. Persisted-data compatibility was considered for storage changes.
-6. The final response briefly lists changed files, validation performed and any
-   remaining limitations.
+6. The final response briefly lists changed files, validation performed,
+   failures and remaining limitations.
+7. No unrelated files or user changes were modified.
 
 ## File permissions
 
@@ -138,3 +156,5 @@ Before considering a change complete:
   to modify it.
 - Authorization to modify one file does not imply authorization to modify
   related, neighboring or parent files.
+- When authorization is ambiguous, ask the user before reading or modifying the
+  file.
