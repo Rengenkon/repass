@@ -1,11 +1,10 @@
-use crate::tags::TagId;
-use crate::record::types::{Data, Host, Timestamp};
-use serde::Serialize;
 use crate::record::serialize::StoredRecord;
+use crate::record::types::{Data, Host, Timestamp};
+use crate::tags::TagId;
+use serde::Serialize;
 
-mod serialize;
+pub mod serialize;
 pub mod types;
-
 
 pub struct Records {
     logins: Vec<String>,
