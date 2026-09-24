@@ -24,10 +24,9 @@
       "effect": "allow"
     },
 
-    // Проверка форматирования без изменения файлов
     {
       "action": "shell",
-      "resource": "cargo fmt --check *",
+      "resource": "cargo fmt *",
       "effect": "allow"
     },
     {
