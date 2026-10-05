@@ -4,7 +4,6 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce};
 use rand::RngExt;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File, OpenOptions};
@@ -12,21 +11,20 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::types::{Data, Host, Timestamp};
-use crate::tags::TagId;
-
-const MAGIC: &[u8; 8] = b"REPASS\0\0";
+const METADATA_MAGIC: &[u8; 8] = b"REPMETA\0";
+const DATA_MAGIC: &[u8; 8] = b"REPDATA\0";
 const FORMAT_VERSION: u16 = 1;
-const SALT_LEN: usize = 16;
-const NONCE_LEN: usize = 12;
 const DATA_KEY_LEN: usize = 32;
+const SALT_LEN: usize = 16;
+const STORAGE_ID_LEN: usize = 16;
+const NONCE_LEN: usize = 12;
 const WRAPPED_KEY_LEN: usize = DATA_KEY_LEN + 16;
 const KDF_MEMORY_KIB: u32 = 19 * 1024;
 const KDF_ITERATIONS: u32 = 2;
 const KDF_LANES: u32 = 1;
-const HEADER_PREFIX_LEN: usize = 8 + 2 + 4 + 4 + 4 + SALT_LEN;
+const HEADER_PREFIX_LEN: usize = 8 + 2 + 4 + 4 + 4 + SALT_LEN + STORAGE_ID_LEN;
 const HEADER_LEN: usize = HEADER_PREFIX_LEN + NONCE_LEN + WRAPPED_KEY_LEN;
-const DOCUMENT_AAD: &[u8] = b"repass encrypted document v1";
+const DATA_HEADER_LEN: usize = 8 + 2;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -37,8 +35,8 @@ pub enum VaultError {
     UnsupportedVersion(u16),
     Crypto,
     Serialization(postcard::Error),
-    DocumentKindMismatch { expected: String, actual: String },
-    DocumentVersionMismatch { expected: u16, actual: u16 },
+    DataKindMismatch { expected: String, actual: String },
+    DataVersionMismatch { expected: u16, actual: u16 },
 }
 
 impl Display for VaultError {
@@ -49,17 +47,17 @@ impl Display for VaultError {
             Self::UnsupportedVersion(version) => {
                 write!(formatter, "unsupported vault format version: {version}")
             }
-            Self::Crypto => write!(formatter, "vault authentication or decryption failed"),
+            Self::Crypto => formatter.write_str("vault authentication or decryption failed"),
             Self::Serialization(error) => write!(formatter, "vault serialization failed: {error}"),
-            Self::DocumentKindMismatch { expected, actual } => {
+            Self::DataKindMismatch { expected, actual } => {
                 write!(
                     formatter,
-                    "expected document kind {expected:?}, found {actual:?}"
+                    "expected data file {expected:?}, found {actual:?}"
                 )
             }
-            Self::DocumentVersionMismatch { expected, actual } => write!(
+            Self::DataVersionMismatch { expected, actual } => write!(
                 formatter,
-                "expected document schema version {expected}, found {actual}"
+                "expected data schema version {expected}, found {actual}"
             ),
         }
     }
@@ -87,39 +85,29 @@ impl From<postcard::Error> for VaultError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
-pub struct StoredRecord {
-    login: String,
-    host: Option<Host>,
-    data: Vec<Data>,
-    tags: Vec<TagId>,
-    created: Timestamp,
-    updated: Timestamp,
-}
-
-#[derive(Serialize, Deserialize)]
-struct StoredDocument<T> {
+#[derive(Deserialize, Serialize)]
+struct DataFile<T> {
+    storage_id: [u8; STORAGE_ID_LEN],
     kind: String,
     schema_version: u16,
-    id: String,
     value: T,
 }
 
-/// An encrypted file containing independently encrypted, typed documents.
-///
-/// Document values use Postcard, while the public `kind` and schema version are
-/// authenticated as part of each encrypted document's serialized payload.
+/// Key metadata for a directory vault. The metadata file contains the wrapped
+/// data key; records and tags are stored as separate authenticated data files.
 pub struct Vault {
     path: PathBuf,
     data_key: [u8; DATA_KEY_LEN],
-    header: Vec<u8>,
+    storage_id: [u8; STORAGE_ID_LEN],
 }
 
 impl Vault {
-    /// Creates a new empty vault protected by `master_password`.
+    /// Creates key metadata without overwriting an existing file.
     pub fn create(path: impl AsRef<Path>, master_password: &[u8]) -> Result<Self, VaultError> {
         let mut salt = [0; SALT_LEN];
+        let mut storage_id = [0; STORAGE_ID_LEN];
         rand::rng().fill(&mut salt);
+        rand::rng().fill(&mut storage_id);
 
         let data_key = Key::generate();
         let data_key_bytes: [u8; DATA_KEY_LEN] = data_key.into();
@@ -132,16 +120,17 @@ impl Vault {
         )?;
         let cipher =
             ChaCha20Poly1305::new_from_slice(&wrapping_key).map_err(|_| VaultError::Crypto)?;
-        let nonce = Nonce::generate();
 
         let mut header = Vec::with_capacity(HEADER_LEN);
-        header.extend_from_slice(MAGIC);
+        header.extend_from_slice(METADATA_MAGIC);
         header.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
         header.extend_from_slice(&KDF_MEMORY_KIB.to_le_bytes());
         header.extend_from_slice(&KDF_ITERATIONS.to_le_bytes());
         header.extend_from_slice(&KDF_LANES.to_le_bytes());
         header.extend_from_slice(&salt);
+        header.extend_from_slice(&storage_id);
 
+        let nonce = Nonce::generate();
         let encrypted_key = cipher
             .encrypt(
                 &nonce,
@@ -159,24 +148,24 @@ impl Vault {
         Ok(Self {
             path,
             data_key: data_key_bytes,
-            header,
+            storage_id,
         })
     }
 
-    /// Opens an existing vault and verifies the wrapped data key.
+    /// Opens key metadata and verifies the wrapped data key.
     pub fn open(path: impl AsRef<Path>, master_password: &[u8]) -> Result<Self, VaultError> {
         let path = path.as_ref().to_path_buf();
         let mut file = File::open(&path)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
-        if bytes.len() < HEADER_LEN {
-            return Err(VaultError::InvalidFormat("truncated header"));
+        if bytes.len() != HEADER_LEN {
+            return Err(VaultError::InvalidFormat("invalid metadata file length"));
         }
-        if &bytes[..MAGIC.len()] != MAGIC {
-            return Err(VaultError::InvalidFormat("incorrect magic value"));
+        if &bytes[..METADATA_MAGIC.len()] != METADATA_MAGIC {
+            return Err(VaultError::InvalidFormat("incorrect metadata magic value"));
         }
 
-        let mut offset = MAGIC.len();
+        let mut offset = METADATA_MAGIC.len();
         let version = read_u16(&bytes, &mut offset)?;
         if version != FORMAT_VERSION {
             return Err(VaultError::UnsupportedVersion(version));
@@ -186,6 +175,7 @@ impl Vault {
         let lanes = read_u32(&bytes, &mut offset)?;
         validate_kdf_parameters(memory_kib, iterations, lanes)?;
         let salt = take_array::<SALT_LEN>(&bytes, &mut offset)?;
+        let storage_id = take_array::<STORAGE_ID_LEN>(&bytes, &mut offset)?;
         let nonce_bytes = take_array::<NONCE_LEN>(&bytes, &mut offset)?;
         let encrypted_key = &bytes[offset..offset + WRAPPED_KEY_LEN];
 
@@ -205,146 +195,129 @@ impl Vault {
             .map_err(|_| VaultError::Crypto)?;
         let data_key: [u8; DATA_KEY_LEN] = data_key
             .try_into()
-            .map_err(|_| VaultError::InvalidFormat("invalid wrapped data key length"))?;
+            .map_err(|_| VaultError::InvalidFormat("invalid wrapped key length"))?;
 
         Ok(Self {
             path,
             data_key,
-            header: bytes[..HEADER_LEN].to_vec(),
+            storage_id,
         })
     }
 
-    /// Replaces the vault contents with independently encrypted documents.
-    pub fn save_documents<T: Serialize>(
+    /// Atomically writes one encrypted, typed data file.
+    pub fn save_data_file<T: Serialize>(
         &self,
+        path: impl AsRef<Path>,
         kind: &str,
         schema_version: u16,
-        documents: &[(String, T)],
+        value: &T,
     ) -> Result<(), VaultError> {
-        if kind.is_empty() {
-            return Err(VaultError::InvalidFormat("document kind cannot be empty"));
-        }
-
-        let mut output = self.header.clone();
+        let aad = data_aad(self.storage_id, kind, schema_version)?;
+        let document = DataFile {
+            storage_id: self.storage_id,
+            kind: kind.to_owned(),
+            schema_version,
+            value,
+        };
+        let plaintext = postcard::to_allocvec(&document)?;
         let cipher =
             ChaCha20Poly1305::new_from_slice(&self.data_key).map_err(|_| VaultError::Crypto)?;
-        let mut ids = HashSet::with_capacity(documents.len());
-        for (id, value) in documents {
-            if id.is_empty() {
-                return Err(VaultError::InvalidFormat("document ID cannot be empty"));
-            }
-            if !ids.insert(id) {
-                return Err(VaultError::InvalidFormat("duplicate document ID"));
-            }
-            let document = StoredDocument {
-                kind: kind.to_owned(),
-                schema_version,
-                id: id.clone(),
-                value,
-            };
-            let plaintext = postcard::to_allocvec(&document)?;
-            let nonce = Nonce::generate();
-            let encrypted = cipher
-                .encrypt(
-                    &nonce,
-                    Payload {
-                        msg: &plaintext,
-                        aad: DOCUMENT_AAD,
-                    },
-                )
-                .map_err(|_| VaultError::Crypto)?;
-
-            let mut frame = Vec::with_capacity(NONCE_LEN + encrypted.len());
-            frame.extend_from_slice(nonce.as_slice());
-            frame.extend_from_slice(&encrypted);
-            output.extend_from_slice(&cobs::encode_vec(&frame));
-            output.push(0);
-        }
-
-        write_atomically(&self.path, &output)
+        let nonce = Nonce::generate();
+        let encrypted = cipher
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: &plaintext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| VaultError::Crypto)?;
+        let mut bytes = Vec::with_capacity(DATA_HEADER_LEN + NONCE_LEN + encrypted.len());
+        bytes.extend_from_slice(DATA_MAGIC);
+        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(nonce.as_slice());
+        bytes.extend_from_slice(&encrypted);
+        write_atomically(path.as_ref(), &bytes)
     }
 
-    /// Loads all documents of the requested kind and schema version.
-    pub fn load_documents<T: DeserializeOwned>(
+    /// Loads and authenticates one encrypted, typed data file.
+    pub fn load_data_file<T: DeserializeOwned>(
         &self,
+        path: impl AsRef<Path>,
         expected_kind: &str,
         expected_schema_version: u16,
-    ) -> Result<Vec<(String, T)>, VaultError> {
-        let bytes = fs::read(&self.path)?;
-        if bytes.len() < HEADER_LEN {
-            return Err(VaultError::InvalidFormat("truncated header"));
+    ) -> Result<T, VaultError> {
+        let bytes = fs::read(path)?;
+        if bytes.len() < DATA_HEADER_LEN + NONCE_LEN + 16 {
+            return Err(VaultError::InvalidFormat("truncated data file"));
         }
-        validate_header(&bytes)?;
-        if bytes[..HEADER_LEN] != self.header {
-            return Err(VaultError::InvalidFormat(
-                "vault header changed after opening",
-            ));
+        if &bytes[..DATA_MAGIC.len()] != DATA_MAGIC {
+            return Err(VaultError::InvalidFormat("incorrect data-file magic value"));
         }
+        let version = u16::from_le_bytes([bytes[8], bytes[9]]);
+        if version != FORMAT_VERSION {
+            return Err(VaultError::UnsupportedVersion(version));
+        }
+        let nonce_bytes: [u8; NONCE_LEN] = bytes[DATA_HEADER_LEN..DATA_HEADER_LEN + NONCE_LEN]
+            .try_into()
+            .map_err(|_| VaultError::InvalidFormat("invalid data-file nonce length"))?;
+        let nonce = Nonce::from(nonce_bytes);
+        let aad = data_aad(self.storage_id, expected_kind, expected_schema_version)?;
         let cipher =
             ChaCha20Poly1305::new_from_slice(&self.data_key).map_err(|_| VaultError::Crypto)?;
-        let framed_records = &bytes[HEADER_LEN..];
-        if framed_records.is_empty() {
-            return Ok(Vec::new());
+        let plaintext = cipher
+            .decrypt(
+                &nonce,
+                Payload {
+                    msg: &bytes[DATA_HEADER_LEN + NONCE_LEN..],
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| VaultError::Crypto)?;
+        let document: DataFile<T> = postcard::from_bytes(&plaintext)?;
+        if document.storage_id != self.storage_id {
+            return Err(VaultError::InvalidFormat(
+                "data file belongs to another vault",
+            ));
         }
-        if !framed_records.ends_with(&[0]) {
-            return Err(VaultError::InvalidFormat("unterminated COBS frame"));
+        if document.kind != expected_kind {
+            return Err(VaultError::DataKindMismatch {
+                expected: expected_kind.to_owned(),
+                actual: document.kind,
+            });
         }
-
-        let mut documents = Vec::new();
-        let mut ids = HashSet::new();
-        let frames: Vec<_> = framed_records.split(|byte| *byte == 0).collect();
-        for (index, encoded_frame) in frames.iter().enumerate() {
-            if encoded_frame.is_empty() && index + 1 == frames.len() {
-                continue;
-            }
-            if encoded_frame.is_empty() {
-                return Err(VaultError::InvalidFormat("empty COBS frame"));
-            }
-            let frame = cobs::decode_vec(encoded_frame)
-                .map_err(|_| VaultError::InvalidFormat("invalid COBS frame"))?;
-            if frame.len() < NONCE_LEN + 16 {
-                return Err(VaultError::InvalidFormat(
-                    "encrypted document frame is too short",
-                ));
-            }
-            let (nonce_bytes, encrypted) = frame.split_at(NONCE_LEN);
-            let nonce_bytes: [u8; NONCE_LEN] = nonce_bytes
-                .try_into()
-                .map_err(|_| VaultError::InvalidFormat("invalid nonce length"))?;
-            let nonce = Nonce::from(nonce_bytes);
-            let plaintext = cipher
-                .decrypt(
-                    &nonce,
-                    Payload {
-                        msg: encrypted,
-                        aad: DOCUMENT_AAD,
-                    },
-                )
-                .map_err(|_| VaultError::Crypto)?;
-            let document: StoredDocument<T> = postcard::from_bytes(&plaintext)?;
-            if document.kind != expected_kind {
-                return Err(VaultError::DocumentKindMismatch {
-                    expected: expected_kind.to_owned(),
-                    actual: document.kind,
-                });
-            }
-            if document.schema_version != expected_schema_version {
-                return Err(VaultError::DocumentVersionMismatch {
-                    expected: expected_schema_version,
-                    actual: document.schema_version,
-                });
-            }
-            if document.id.is_empty() {
-                return Err(VaultError::InvalidFormat("document ID cannot be empty"));
-            }
-            if !ids.insert(document.id.clone()) {
-                return Err(VaultError::InvalidFormat("duplicate document ID"));
-            }
-            documents.push((document.id, document.value));
+        if document.schema_version != expected_schema_version {
+            return Err(VaultError::DataVersionMismatch {
+                expected: expected_schema_version,
+                actual: document.schema_version,
+            });
         }
-
-        Ok(documents)
+        Ok(document.value)
     }
+
+    pub fn metadata_path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn data_aad(
+    storage_id: [u8; STORAGE_ID_LEN],
+    kind: &str,
+    schema_version: u16,
+) -> Result<Vec<u8>, VaultError> {
+    if kind.is_empty() {
+        return Err(VaultError::InvalidFormat("data-file kind cannot be empty"));
+    }
+    let kind_length = u32::try_from(kind.len())
+        .map_err(|_| VaultError::InvalidFormat("data-file kind is too long"))?;
+    let mut aad = Vec::with_capacity(DATA_HEADER_LEN + STORAGE_ID_LEN + 4 + kind.len() + 2);
+    aad.extend_from_slice(DATA_MAGIC);
+    aad.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+    aad.extend_from_slice(&storage_id);
+    aad.extend_from_slice(&kind_length.to_le_bytes());
+    aad.extend_from_slice(kind.as_bytes());
+    aad.extend_from_slice(&schema_version.to_le_bytes());
+    Ok(aad)
 }
 
 fn derive_wrapping_key(
@@ -362,20 +335,6 @@ fn derive_wrapping_key(
         .hash_password_into(master_password, salt, &mut key)
         .map_err(|_| VaultError::InvalidFormat("invalid Argon2 parameters"))?;
     Ok(key)
-}
-
-fn validate_header(bytes: &[u8]) -> Result<(), VaultError> {
-    if bytes.len() < HEADER_LEN {
-        return Err(VaultError::InvalidFormat("truncated header"));
-    }
-    if &bytes[..MAGIC.len()] != MAGIC {
-        return Err(VaultError::InvalidFormat("incorrect magic value"));
-    }
-    let version = u16::from_le_bytes([bytes[8], bytes[9]]);
-    if version != FORMAT_VERSION {
-        return Err(VaultError::UnsupportedVersion(version));
-    }
-    Ok(())
 }
 
 fn validate_kdf_parameters(memory_kib: u32, iterations: u32, lanes: u32) -> Result<(), VaultError> {
@@ -440,7 +399,7 @@ fn write_new_atomically(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::hard_link(&temp_path, path)?;
-        fs::remove_file(&temp_path)?;
+        let _ = fs::remove_file(&temp_path);
         Ok(())
     })();
     if write_result.is_err() {
@@ -453,56 +412,84 @@ fn write_new_atomically(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
 mod tests {
     use super::*;
 
-    fn test_path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("repass-{name}-{}.vault", std::process::id()))
+    fn test_directory(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("repass-{name}-{}", std::process::id()))
     }
 
     #[test]
-    fn creates_saves_and_reopens_independent_documents() {
-        let path = test_path("round-trip");
-        let vault = Vault::create(&path, b"master password").unwrap();
-        let documents = vec![
-            ("doc-1".to_owned(), "alpha".to_owned()),
-            ("doc-2".to_owned(), "beta\nwith newline".to_owned()),
-        ];
-        vault.save_documents("note", 1, &documents).unwrap();
-
-        let reopened = Vault::open(&path, b"master password").unwrap();
-        let loaded: Vec<(String, String)> = reopened.load_documents("note", 1).unwrap();
-        assert_eq!(loaded, documents);
-        fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn rejects_wrong_password_and_corrupted_frame() {
-        let path = test_path("corruption");
-        let vault = Vault::create(&path, b"master password").unwrap();
+    fn metadata_and_independent_data_files_round_trip() {
+        let directory = test_directory("separate-files");
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let metadata_path = directory.join("metadata.repass");
+        let records_path = directory.join("records.repass");
+        let tags_path = directory.join("tags.repass");
+        let vault = Vault::create(&metadata_path, b"master password").unwrap();
+        let records = vec!["one", "two"];
+        let tags = vec!["work"];
         vault
-            .save_documents("note", 1, &[("doc-1".to_owned(), "secret")])
+            .save_data_file(&records_path, "records", 1, &records)
+            .unwrap();
+        vault.save_data_file(&tags_path, "tags", 1, &tags).unwrap();
+
+        let reopened = Vault::open(&metadata_path, b"master password").unwrap();
+        let loaded_records: Vec<String> = reopened
+            .load_data_file(&records_path, "records", 1)
+            .unwrap();
+        let loaded_tags: Vec<String> = reopened.load_data_file(&tags_path, "tags", 1).unwrap();
+        assert_eq!(loaded_records, ["one", "two"]);
+        assert_eq!(loaded_tags, ["work"]);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn data_files_are_bound_to_vault_and_kind() {
+        let directory = test_directory("bound-files");
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let first_path = directory.join("metadata-1.repass");
+        let second_path = directory.join("metadata-2.repass");
+        let data_path = directory.join("records.repass");
+        let first = Vault::create(&first_path, b"master").unwrap();
+        first
+            .save_data_file(&data_path, "records", 1, &"record")
+            .unwrap();
+        let second = Vault::create(&second_path, b"master").unwrap();
+        assert!(matches!(
+            second.load_data_file::<String>(&data_path, "records", 1),
+            Err(VaultError::Crypto)
+        ));
+        assert!(matches!(
+            first.load_data_file::<String>(&data_path, "tags", 1),
+            Err(VaultError::Crypto)
+        ));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn wrong_password_and_corrupt_data_are_rejected() {
+        let directory = test_directory("corruption");
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let metadata_path = directory.join("metadata.repass");
+        let data_path = directory.join("records.repass");
+        let vault = Vault::create(&metadata_path, b"master password").unwrap();
+        vault
+            .save_data_file(&data_path, "records", 1, &"secret")
             .unwrap();
         assert!(matches!(
-            Vault::open(&path, b"wrong password"),
+            Vault::open(&metadata_path, b"wrong password"),
             Err(VaultError::Crypto)
         ));
 
-        let mut bytes = fs::read(&path).unwrap();
-        let last_data_byte = bytes.len() - 2;
-        bytes[last_data_byte] ^= 1;
-        fs::write(&path, bytes).unwrap();
-        let reopened = Vault::open(&path, b"master password").unwrap();
+        let mut bytes = fs::read(&data_path).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        fs::write(&data_path, bytes).unwrap();
         assert!(matches!(
-            reopened.load_documents::<String>("note", 1),
-            Err(VaultError::Crypto) | Err(VaultError::InvalidFormat(_))
+            vault.load_data_file::<String>(&data_path, "records", 1),
+            Err(VaultError::Crypto)
         ));
-        fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn empty_vault_has_no_document_frames() {
-        let path = test_path("empty");
-        let vault = Vault::create(&path, b"master password").unwrap();
-        let loaded: Vec<(String, String)> = vault.load_documents("note", 1).unwrap();
-        assert!(loaded.is_empty());
-        fs::remove_file(path).unwrap();
+        fs::remove_dir_all(directory).unwrap();
     }
 }

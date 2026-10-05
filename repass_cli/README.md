@@ -14,6 +14,8 @@ repass [--data-dir <DIR>] record delete <RECORD_ID>
 repass [--data-dir <DIR>] tag add --name <NAME>
 repass [--data-dir <DIR>] tag list
 repass [--data-dir <DIR>] tag delete <TAG_ID>
+repass [--data-dir <DIR>] tag rename <TAG_ID> --name <NAME>
+repass [--data-dir <DIR>] tag recover
 repass [--data-dir <DIR>] interactive
 repass completions <SHELL>
 ```
@@ -25,8 +27,9 @@ component expands to `$HOME`. An empty selected directory is an error.
 `repass` without a command displays help. Use `repass interactive` to start a
 session. Enter the same commands
 without the `repass` prefix; quotes preserve spaces. Missing mandatory arguments
-are prompted. Password input is hidden in the terminal; in a one-shot invocation,
-`--password-stdin` reads one line from stdin (removing its line ending).
+are prompted. The master password and record passwords are requested with hidden
+terminal input. In a one-shot invocation, `--password-stdin` reads one record
+password line from stdin (removing its line ending).
 Optional arguments are not prompted. Use `h` or `help` for help (including
 `h generate` and `help record add`), and `q`, `quit`, or EOF to leave.
 `exit` is not a supported command.
@@ -104,20 +107,30 @@ repass generate --length 20 --separator-kind fixed-interval --separator-interval
 repass generate --length 20 --separator-kind 4 --separator-count 2
 ```
 
-## Current module limitations
+## Storage format and tag catalog
 
-Storage commands currently return explanatory TODO errors. `repass_storage`
-already has an owned `Vault` with file-level create/open and document save/load
-APIs, but no directory-level API to select its files and initialize the directory.
-The CLI creates no data directories or vault files and does not select internal
-filenames. Its session reserves ownership of the existing `Vault` type; actual
-lazy opening and key reuse await the directory-level API. Records also need
-stable domain IDs and support for the agreed fields; tags need persisted
-enumeration and deletion with reference checks. The existing generic document
-save API replaces all contents and cannot serve as a partial record/tag update.
+Storage uses three files in the selected data directory:
 
-Once those APIs exist, handlers must retain the owned vault, save each successful
-mutation through the module, and close it on switch or session termination. A failed save must
-retain the current vault. `vault init` must not overwrite an existing vault;
-other storage commands should ask the module to initialize an absent vault.
-No persistence format is defined by this CLI.
+```text
+metadata.repass  # key metadata
+records.repass   # encrypted records and the next record ID
+tags.repass      # encrypted tag names and the next tag ID; optional
+```
+
+Record changes atomically replace only `records.repass`; tag catalog changes
+atomically replace only `tags.repass`. There is no cross-file transaction.
+Storage commands lazily request the master password and create a new vault when
+no vault files exist. `vault init` explicitly creates one and refuses to replace
+existing files. A partial initialization is reported as an error rather than
+silently treated as an empty vault.
+
+The tag catalog is optional. If it is missing or unreadable, records remain
+available. Referenced IDs without a stored name are shown as temporary technical
+tags such as `#tag-42`. `tag rename <TAG_ID> --name <NAME>` saves that tag under
+the same ID. A damaged catalog is not overwritten by ordinary tag operations;
+`tag recover` explicitly rebuilds it using technical names for the tags currently
+known from records. Names that could not be read from a damaged catalog cannot be
+recovered by this operation.
+
+This is a new storage format. Existing `vault.repass` files are not migrated or
+modified automatically; the CLI reports them as unsupported.

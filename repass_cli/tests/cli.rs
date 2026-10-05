@@ -178,7 +178,7 @@ fn separator_help_is_numbered_and_descriptive() {
 }
 
 #[test]
-fn directory_precedence_is_used_without_creating_storage() {
+fn storage_commands_prompt_for_a_master_password_before_opening() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/nonexistent-vault");
     assert!(!root.exists());
     let output = cli()
@@ -189,7 +189,7 @@ fn directory_precedence_is_used_without_creating_storage() {
         .unwrap();
     assert!(!output.status.success());
     let error = String::from_utf8(output.stderr).unwrap();
-    assert!(error.contains(root.to_str().unwrap()));
+    assert!(error.contains("Master password:"));
     assert!(!error.contains("environment-vault"));
     assert!(!root.exists());
 
@@ -198,21 +198,23 @@ fn directory_precedence_is_used_without_creating_storage() {
         .args(["vault", "info"])
         .output()
         .unwrap();
+    assert!(!output.status.success());
     assert!(
         String::from_utf8(output.stderr)
             .unwrap()
-            .contains("directory: environment-vault")
+            .contains("Master password:")
     );
     let output = cli().args(["vault", "info"]).output().unwrap();
+    assert!(!output.status.success());
     assert!(
         String::from_utf8(output.stderr)
             .unwrap()
-            .contains("directory: /unused-home/.repass")
+            .contains("Master password:")
     );
 }
 
 #[test]
-fn explicit_interactive_entrypoint_prompts_and_continues_after_storage_errors() {
+fn explicit_interactive_entrypoint_continues_after_password_prompt_errors() {
     for quit in ["q", "quit"] {
         let mut child = cli()
             .arg("interactive")
@@ -240,8 +242,7 @@ fn explicit_interactive_entrypoint_prompts_and_continues_after_storage_errors() 
         );
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.contains("length: "));
-        assert!(text.contains("TODO: repass_storage"));
-        assert!(text.contains("directory: next-vault"));
+        assert!(text.contains("Master password:"));
         assert!(text.contains("Data directory: next-vault"));
     }
 }
@@ -291,6 +292,8 @@ fn shell_completion_scripts_include_commands_flags_and_separator_aliases() {
             "data-dir",
             "between-parts",
             "fixed-count",
+            "rename",
+            "recover",
         ] {
             assert!(script.contains(item), "missing {item} in {shell} script");
         }
@@ -344,7 +347,7 @@ fn redirected_output_is_plain_and_no_color_disables_forced_color() {
         assert!(
             String::from_utf8(output.stderr)
                 .unwrap()
-                .contains("TODO: repass_storage")
+                .contains("Master password:")
         );
 
         let mut command = cli();

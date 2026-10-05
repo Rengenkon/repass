@@ -1,6 +1,7 @@
-use crate::Result;
-use repass_storage::record::serialize::Vault;
+use crate::{Result, output};
+use repass_storage::{Storage, TagCatalogStatus};
 use std::ffi::OsString;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 pub fn resolve_data_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
@@ -41,14 +42,22 @@ fn expand(path: PathBuf, home: Option<OsString>) -> Result<PathBuf> {
 
 pub struct Session {
     data_dir: PathBuf,
-    vault: Option<Vault>,
+    storage: Option<Storage>,
 }
 
 impl Session {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             data_dir,
-            vault: None,
+            storage: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_storage(data_dir: PathBuf, storage: Storage) -> Self {
+        Self {
+            data_dir,
+            storage: Some(storage),
         }
     }
 
@@ -56,17 +65,39 @@ impl Session {
         &self.data_dir
     }
 
-    pub fn storage_operation(&mut self, requirement: &str) -> Result<()> {
-        // TODO: storage must resolve its files and initialize the data directory.
-        // Vault::create/open already work with a file path, not a directory.
-        // Once a directory-level API exists, request the master password lazily,
-        // retain the returned Vault here, and reuse its unwrapped key on every call.
-        // Domain mutation and saving must use the module's record/tag schema;
-        // save_documents replaces all documents, so it is not a partial-update API.
-        Err(format!(
-            "TODO: repass_storage needs a directory-level vault API for file discovery and initialization (directory: {}); this command also needs {requirement}",
-            self.data_dir.display()
-        ).into())
+    pub fn ensure_storage(
+        &mut self,
+        output_stream: &mut impl Write,
+        interactive: bool,
+    ) -> Result<&mut Storage> {
+        if self.storage.is_none() {
+            let mut password = read_master_password(output_stream, interactive)?.into_bytes();
+            let result = Storage::open_or_create_in(&self.data_dir, &password);
+            password.fill(0);
+            let storage = result?;
+            if let TagCatalogStatus::Unavailable(reason) = storage.tag_catalog_status() {
+                output::warning(
+                    output_stream,
+                    format!("tag catalog unavailable: {reason}; use `tag recover` to rebuild it"),
+                )?;
+            }
+            self.storage = Some(storage);
+        }
+        self.storage
+            .as_mut()
+            .ok_or_else(|| "storage initialization did not produce an open vault".into())
+    }
+
+    pub fn initialize_storage(
+        &mut self,
+        output_stream: &mut impl Write,
+        interactive: bool,
+    ) -> Result<()> {
+        let mut password = read_master_password(output_stream, interactive)?.into_bytes();
+        let result = Storage::create_in(&self.data_dir, &password);
+        password.fill(0);
+        self.storage = Some(result?);
+        Ok(())
     }
 
     pub fn switch(&mut self, directory: PathBuf) -> Result<()> {
@@ -78,12 +109,19 @@ impl Session {
     }
 
     pub fn close(&mut self) {
-        // There are no implemented mutations or unsaved changes yet. Vault's
-        // current save API writes synchronously; closing releases ownership.
-        // TODO: when mutations exist, propagate save failures before dropping
-        // the vault or switching directories, retaining the session on failure.
-        self.vault.take();
+        self.storage.take();
     }
+}
+
+fn read_master_password(output_stream: &mut impl Write, interactive: bool) -> Result<String> {
+    if interactive {
+        output::styled(output_stream, output::PROMPT, "Master password: ")?;
+        output_stream.flush()?;
+    } else {
+        write!(io::stderr(), "Master password: ")?;
+        io::stderr().flush()?;
+    }
+    Ok(rpassword::read_password()?)
 }
 
 #[cfg(test)]
@@ -121,12 +159,11 @@ mod tests {
     #[test]
     fn switching_is_lazy_and_failed_operations_retain_the_directory() {
         let mut session = Session::new("old".into());
-        assert!(session.storage_operation("listing").is_err());
         assert_eq!(session.data_dir(), Path::new("old"));
         assert!(session.switch(PathBuf::new()).is_err());
         assert_eq!(session.data_dir(), Path::new("old"));
         session.switch("new".into()).unwrap();
         assert_eq!(session.data_dir(), Path::new("new"));
-        assert!(session.vault.is_none());
+        assert!(session.storage.is_none());
     }
 }

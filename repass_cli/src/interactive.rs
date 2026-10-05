@@ -348,7 +348,8 @@ mod tests {
         let mut output = Vec::new();
         run(&mut session, &mut input, &mut output).unwrap();
         let text = String::from_utf8(output).unwrap();
-        assert!(text.contains("TODO: repass_storage"));
+        assert!(text.contains("Master password:"));
+        assert!(!text.contains("TODO: repass_storage"));
         assert!(text.contains("unrecognized subcommand"));
         assert!(text.contains("unmatched quote"));
         assert!(text.contains("length: "));

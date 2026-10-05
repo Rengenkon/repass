@@ -37,6 +37,11 @@ pub fn error(output: &mut impl Write, error: impl Display) -> io::Result<()> {
     writeln!(output)
 }
 
+pub fn warning(output: &mut impl Write, message: impl Display) -> io::Result<()> {
+    styled(output, TODO, message)?;
+    writeln!(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
