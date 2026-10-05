@@ -2,6 +2,26 @@
 
 Run with `cargo run -p repass_cli -- <arguments>` or build the `repass` binary.
 
+## Manual page
+
+The manual includes command and option descriptions, input modes, recovery
+behavior, and examples. Open it directly from the repository root:
+
+```sh
+man -l repass_cli/man/repass.1
+```
+
+To install it for the current user on Linux:
+
+```sh
+install -Dm644 repass_cli/man/repass.1 "$HOME/.local/share/man/man1/repass.1"
+man repass
+```
+
+The installation directory must be included in your system's man search path.
+
+## Command overview
+
 ```text
 repass generate (--length <N> | --min-length <N> --max-length <N>) --separator-kind <KIND> [--count <N>] [--dictionary <FILE> | --preset <SET>...] [--shape-selection first|random] [--separator <TEXT>] [--separator-interval <N>] [--separator-count <N>] [--warnings | --no-warnings]
 repass vault [--data-dir <DIR>] init
@@ -44,6 +64,10 @@ Optional arguments are not prompted. Use `h` or `help` for help (including
 `h generate` and `help record add`), and `q`, `quit`, or EOF to leave.
 `exit` is not a supported command.
 The `interactive` command is unavailable and absent from help inside a session.
+Use `-h` for a compact summary and `--help` for full descriptions and examples.
+Session help keeps required arguments marked as required: omitting them prompts
+for their values. Input instructions and examples in session help use session
+syntax; SSH input ends with a line containing only `.`.
 
 Inside a session, ordinary commands cannot accept `--data-dir`. Use
 `vault switch <DIR>` to close the old vault and change the session's directory.

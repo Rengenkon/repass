@@ -15,6 +15,7 @@ pub use generation::generate;
     name = "repass",
     version,
     about = "Password generation and vault commands",
+    after_long_help = "Examples:\n  repass generate --length 16 --separator-kind none\n  repass vault init\n  repass record list\n  repass interactive\n\nUse '<command> -h' for a summary or '<command> --help' for details and examples.",
     styles = output::styles()
 )]
 pub struct Cli {
@@ -24,42 +25,72 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Generate passwords without opening the vault
+    /// Generate passwords without opening a vault
+    ///
+    /// Specify --length or both --min-length and --max-length, plus a separator
+    /// strategy. Length includes separators and counts Unicode scalar values.
+    /// By default, all built-in character sets are used. Output is one password
+    /// per line; an unreachable length is reported as an error.
+    #[command(
+        after_long_help = "Examples:\n  repass generate --length 16 --separator-kind none\n  repass generate --min-length 12 --max-length 20 --separator-kind 2\n  repass generate --length 16 --separator-kind none --preset digits lowercase --count 3",
+        after_help = "Required: --length or both --min-length and --max-length, plus --separator-kind."
+    )]
     Generate(GenerateArgs),
-    /// Initialize or inspect a vault
+    /// Create, inspect, recover or change the password of a vault
     Vault {
-        /// Data directory (overrides REPASS_DATA_DIR; default: $HOME/.repass)
+        /// Vault directory (default: REPASS_DATA_DIR, then $HOME/.repass)
         #[arg(long, global = true, value_hint = ValueHint::DirPath)]
         data_dir: Option<PathBuf>,
         #[command(subcommand)]
         command: VaultCommand,
     },
-    /// Manage records using stable IDs
+    /// Manage records and their passwords, SSH keys, TOTP data and codes
+    ///
+    /// Use list or find to obtain record IDs. Use show to inspect the data IDs
+    /// within a record, then data-add, data-update or data-delete to edit its
+    /// contents. Storage commands request a master password and create a vault
+    /// on first use if none exists.
     Record {
-        /// Data directory (overrides REPASS_DATA_DIR; default: $HOME/.repass)
+        /// Vault directory (default: REPASS_DATA_DIR, then $HOME/.repass)
         #[arg(long, global = true, value_hint = ValueHint::DirPath)]
         data_dir: Option<PathBuf>,
         #[command(subcommand)]
         command: RecordCommand,
     },
-    /// Manage tags using stable IDs
+    /// Create, list, rename and remove tags
     Tag {
-        /// Data directory (overrides REPASS_DATA_DIR; default: $HOME/.repass)
+        /// Vault directory (default: REPASS_DATA_DIR, then $HOME/.repass)
         #[arg(long, global = true, value_hint = ValueHint::DirPath)]
         data_dir: Option<PathBuf>,
         #[command(subcommand)]
         command: TagCommand,
     },
     /// Start a persistent interactive session
+    ///
+    /// Enter commands without the 'repass' prefix. Use help or h for help and
+    /// quit or q to leave. Missing required arguments are prompted; optional
+    /// arguments are not. Passwords, codes and TOTP secrets use hidden input.
+    /// Use 'vault switch <DIR>' to select another vault; it opens on first use.
+    /// Session commands use that directory rather than --data-dir.
     Interactive(InteractiveArgs),
-    /// Configure session warning output
+    /// Show or change warnings about unused generation options
+    ///
+    /// With no subcommand, show the current setting. Warnings are enabled by
+    /// default. on/off changes the session default; generate --warnings or
+    /// --no-warnings overrides it for one invocation.
     #[command(hide = true)]
     Warnings {
         #[command(subcommand)]
         command: Option<WarningsCommand>,
     },
     /// Print a shell completion script to stdout
+    ///
+    /// Generates completion for the external shell, not Tab completion inside
+    /// a repass session. No vault is opened. Load the script in your shell or
+    /// save it in its completion directory.
+    #[command(after_long_help = "Example (Bash):\n  source <(repass completions bash)")]
     Completions {
+        /// Shell for which to generate the script
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
@@ -76,17 +107,31 @@ pub struct GenerateArgs {
     /// Inclusive upper bound of a random target length
     #[arg(long, value_parser = positive_usize, requires = "min_length")]
     pub max_length: Option<usize>,
-    #[arg(long, value_enum, hide_possible_values = true, help = SEPARATOR_HELP)]
+    #[arg(long, value_enum, hide_possible_values = true, help = SEPARATOR_SHORT_HELP, long_help = SEPARATOR_HELP)]
     pub separator_kind: SeparatorKind,
+    /// Number of passwords to generate
     #[arg(long, default_value = "1", value_parser = positive_usize)]
     pub count: usize,
-    /// UTF-8 dictionary, one entry per line; default: all built-in character sets
+    /// UTF-8 dictionary file, one entry per line
+    ///
+    /// Replaces the built-in character sets and cannot be combined with --preset.
+    /// Line endings are removed; entries may contain multiple Unicode characters.
     #[arg(long, value_hint = ValueHint::FilePath, conflicts_with = "preset")]
     pub dictionary: Option<PathBuf>,
-    /// Built-in character sets (repeat or pass multiple names); default: all
-    #[arg(long, value_enum, num_args = 1..)]
+    /// Combine built-in character sets (default: all)
+    ///
+    /// Repeat this option or pass several names to form their union. Selecting
+    /// sets does not require every set to appear in each generated password.
+    /// Cannot be combined with --dictionary.
+    ///
+    /// Sets: digits, lowercase, uppercase, punctuation, symbols, brackets,
+    /// quotes, hash-dollar-percent-caret, backslash-pipe-tilde.
+    #[arg(long, value_enum, num_args = 1.., hide_possible_values = true)]
     pub preset: Vec<PresetKind>,
-    /// Choose the first feasible layout or a random feasible layout
+    /// Choose the first or a random valid arrangement of dictionary entries
+    ///
+    /// first uses the first feasible arrangement of entry lengths and separators.
+    /// random samples among those arrangements, not uniformly among all passwords.
     #[arg(long, value_enum, default_value = "first")]
     pub shape_selection: ShapeKind,
     /// Separator text; default: "-"; ignored by none
@@ -98,26 +143,32 @@ pub struct GenerateArgs {
     /// Number of insertions for fixed-count (default: 3; reduced on short content)
     #[arg(long, value_parser = positive_usize)]
     pub separator_count: Option<usize>,
-    /// Show warnings for separator options ignored by the selected strategy
+    /// Enable warnings about unused separator options
     #[arg(long, conflicts_with = "no_warnings")]
     pub warnings: bool,
-    /// Do not show warnings for separator options ignored by the selected strategy
+    /// Disable warnings about unused separator options
     #[arg(long, conflicts_with = "warnings")]
     pub no_warnings: bool,
 }
 
 #[derive(Args, Default)]
 pub struct InteractiveArgs {
-    /// Data directory (overrides REPASS_DATA_DIR; default: $HOME/.repass)
+    /// Vault directory (default: REPASS_DATA_DIR, then $HOME/.repass)
     #[arg(long, value_hint = ValueHint::DirPath)]
     pub data_dir: Option<PathBuf>,
-    /// Enable warnings in this interactive session
+    /// Enable generation warnings for this session (default)
     #[arg(long, conflicts_with = "no_warnings")]
     pub warnings: bool,
-    /// Disable warnings in this interactive session
+    /// Disable generation warnings for this session
     #[arg(long, conflicts_with = "warnings")]
     pub no_warnings: bool,
 }
+
+pub const SEPARATOR_SHORT_HELP: &str = "Separator strategy (name or number):
+1. none
+2. between-parts
+3. fixed-interval
+4. fixed-count";
 
 pub const SEPARATOR_HELP: &str = "Separator strategy (required; enter a name or number):
 1. none — join dictionary entries without a separator
@@ -199,19 +250,42 @@ fn positive_usize(value: &str) -> std::result::Result<usize, String> {
 
 #[derive(Subcommand)]
 pub enum VaultCommand {
-    /// Explicitly initialize a vault without overwriting an existing one
+    /// Create a new vault without overwriting existing vault files
+    ///
+    /// Requests a nonempty master password and hidden confirmation. A mismatch
+    /// cancels creation. Existing vault files or backups prevent initialization.
     Init,
-    /// Show vault information
+    /// Show the directory, record/tag counts and tag-catalog status
+    ///
+    /// Requests the master password to open the vault. If no vault exists,
+    /// creates one after password confirmation. Also reports metadata count
+    /// repair failures.
     Info,
-    /// Restore authenticated backups, preserving damaged originals
+    /// Restore vault files from validated .bak snapshots
+    ///
+    /// Requests the master password and restores missing or damaged files from
+    /// authenticated backups. Damaged originals are kept as .damaged-* copies.
+    /// Backups contain the previous snapshot: the latest mutation may be lost.
+    /// Without a usable backup, records cannot be recovered.
     Recover,
-    /// Complete an interrupted initialization with authenticated empty metadata
+    /// Complete an interrupted empty-vault initialization
+    ///
+    /// Creates empty records only when authenticated metadata has valid zero
+    /// counts and no record/tag files or their backups exist. This does not
+    /// restore lost records; use recover when backups are available.
     FinishInit,
-    /// Rewrap the data key with a new master password
+    /// Change the master password
+    ///
+    /// Opens the vault with the current password, then requests and confirms a
+    /// nonempty new password. Updates key metadata and its backup without
+    /// rewriting record or tag data.
     ChangePassword,
     /// Close the current vault and select another directory (interactive only)
+    ///
+    /// The selected vault opens when a storage command first needs it.
     #[command(hide = true)]
     Switch {
+        /// Directory to use for subsequent storage commands
         #[arg(value_hint = ValueHint::DirPath)]
         dir: PathBuf,
     },
@@ -219,88 +293,165 @@ pub enum VaultCommand {
 
 #[derive(Subcommand)]
 pub enum RecordCommand {
+    /// Create a record, optionally with one initial data element
+    ///
+    /// A password is optional; a record may start with no data. Select at most
+    /// one data type using its input options. SSH may include a private key, a
+    /// public key, or both; every supplied key field must be nonblank.
+    #[command(
+        after_long_help = "Examples:\n  repass record add --name mail --password-stdin\n  repass record add --name server --host example.test --private-key-file id_ed25519 --public-key-file id_ed25519.pub\n  repass record add --name notes --notes 'Account details'"
+    )]
     Add {
-        #[arg(long)]
+        /// Nonempty display name for the record
+        #[arg(long, help_heading = "Record fields")]
         name: String,
         #[command(flatten)]
         data: DataInput,
-        #[arg(long)]
+        /// Login or account username
+        #[arg(long, help_heading = "Record fields")]
         username: Option<String>,
-        #[arg(long)]
+        /// IP address or domain, without protocol, port or path
+        #[arg(long, help_heading = "Record fields")]
         host: Option<Host>,
-        #[arg(long)]
+        /// Free-form notes
+        #[arg(long, help_heading = "Record fields")]
         notes: Option<String>,
-        #[arg(long, num_args = 1..)]
+        /// Tag IDs to attach (see tag list)
+        #[arg(long, num_args = 1.., help_heading = "Record fields")]
         tag: Vec<TagId>,
     },
+    /// List record summaries, ordered by ID, without secret values
     List {
+        /// Match an IP address or domain (domains ignore case and a trailing dot)
         #[arg(long)]
         host: Option<Host>,
+        /// Require every specified tag ID (see tag list)
         #[arg(long, num_args = 1..)]
         tag: Vec<TagId>,
+        /// Match the full record name, case-sensitively
         #[arg(long)]
         name: Option<String>,
     },
     /// Find records by fuzzy text and/or exact name, host and tag filters
+    ///
+    /// With --query, match fields case-insensitively and order by descending
+    /// relevance, then record ID. Exact filters apply before fuzzy matching.
+    /// Without --query, use exact filters and order by ID. Secret values are
+    /// excluded from matching and output.
+    #[command(
+        after_long_help = "Examples:\n  repass record find --query githab\n  repass record find --query alice --host example.test --tag 1 2"
+    )]
     Find {
-        /// Fuzzy search across name, username, host, notes and tag names
+        /// Fuzzy text across name, username, host, notes and tag names
+        ///
+        /// Supports Unicode, abbreviations and limited typos. Surrounding
+        /// whitespace is trimmed; blank queries are rejected. A query is one
+        /// fuzzy pattern, with no special operator syntax.
         #[arg(long, value_parser = nonblank_query)]
         query: Option<String>,
+        /// Match an IP address or domain (domains ignore case and a trailing dot)
         #[arg(long)]
         host: Option<Host>,
+        /// Match the full record name, case-sensitively
         #[arg(long)]
         name: Option<String>,
+        /// Require every specified tag ID (see tag list)
         #[arg(long, num_args = 1..)]
         tag: Vec<TagId>,
     },
+    /// Show record details and data IDs, masking secret values by default
     Show {
+        /// Record ID from record list or record find
         record_id: String,
         /// Include secret values in the output
         #[arg(long)]
         reveal: bool,
     },
+    /// Change only the specified record fields or tag associations
+    ///
+    /// Omitted fields are retained. Use --clear-* to remove optional fields.
+    /// Use data-add/data-update/data-delete to edit individual data elements.
     Update {
+        /// Record ID from record list or record find
         record_id: String,
+        /// Replace the display name with a nonempty name
         #[arg(long)]
         name: Option<String>,
+        /// Set the login or account username
         #[arg(long)]
         username: Option<String>,
+        /// Set an IP address or domain, without protocol, port or path
         #[arg(long)]
         host: Option<Host>,
+        /// Set free-form notes
         #[arg(long)]
         notes: Option<String>,
+        /// Remove the username
         #[arg(long, conflicts_with = "username")]
         clear_username: bool,
+        /// Remove the host
         #[arg(long, conflicts_with = "host")]
         clear_host: bool,
+        /// Remove the notes
         #[arg(long, conflicts_with = "notes")]
         clear_notes: bool,
+        /// Add or replace the record's only password from a stdin line
+        ///
+        /// Adds a password if none exists, or replaces the only password.
+        /// With multiple passwords, use data-update with a data ID instead.
+        /// One-shot mode reads one stdin line; sessions use hidden input.
         #[arg(long)]
         password_stdin: bool,
+        /// Attach existing tag IDs (see tag list)
         #[arg(long, num_args = 1..)]
         add_tag: Vec<TagId>,
+        /// Detach tag IDs without deleting the tags
         #[arg(long, num_args = 1..)]
         remove_tag: Vec<TagId>,
     },
+    /// Delete a record and all of its data elements
     Delete {
+        /// Record ID from record list or record find
         record_id: String,
     },
-    /// Append a typed value to a record
+    /// Add one password, SSH, TOTP or code element to a record
+    ///
+    /// Select one data type using its input options; an input source is required.
+    /// SSH may include a private key, a public key, or both. Each element gets
+    /// an ID within its record; multiple elements of the same type are allowed.
+    #[command(
+        after_long_help = "Examples:\n  repass record data-add 1 --totp-stdin --algorithm sha256 --digits 8\n  repass record data-add 1 --code-stdin",
+        after_help = "Select one data type using its input options; an input source is required."
+    )]
     DataAdd {
+        /// Record ID from record list or record find
         record_id: String,
         #[command(flatten)]
         data: DataInput,
     },
-    /// Replace a typed value while retaining its stable ID
+    /// Replace an entire data element, retaining its ID
+    ///
+    /// Select one data type using its input options; an input source is required.
+    /// This is full replacement, not a partial field update. To retain both
+    /// parts of an SSH pair, supply both again. Supplying only the public key
+    /// removes the private part. The data type may also be changed.
+    #[command(
+        after_long_help = "Example:\n  repass record data-update 1 2 --private-key-file id_ed25519 --public-key-file id_ed25519.pub",
+        after_help = "Select one data type using its input options; an input source is required."
+    )]
     DataUpdate {
+        /// Record ID from record list or record find
         record_id: String,
+        /// Data element ID within this record (see record show)
         data_id: DataId,
         #[command(flatten)]
         data: DataInput,
     },
-    /// Delete one typed value; its ID will not be reused
+    /// Delete one data element; its ID will not be reused
     DataDelete {
+        /// Record ID from record list or record find
         record_id: String,
+        /// Data element ID within this record (see record show)
         data_id: DataId,
     },
 }
@@ -323,50 +474,86 @@ pub enum TotpAlgorithmArg {
 
 #[derive(Args, Default)]
 pub struct DataInput {
-    /// Read one password line (hidden terminal input in interactive mode)
-    #[arg(long, conflicts_with_all = ["code_stdin", "totp_stdin", "private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"])]
+    /// Read one password line from stdin
+    ///
+    /// Removes the final LF or CRLF. The master password is requested separately
+    /// through hidden terminal input.
+    #[arg(long, help_heading = "Password", conflicts_with_all = ["code_stdin", "totp_stdin", "private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"])]
     pub password_stdin: bool,
-    /// Read one recovery/code line (hidden terminal input in interactive mode)
-    #[arg(long, conflicts_with_all = ["totp_stdin", "private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"])]
+    /// Read one recovery code or other code line from stdin
+    ///
+    /// Removes the final LF or CRLF. The code must not be blank.
+    #[arg(long, help_heading = "Code", conflicts_with_all = ["totp_stdin", "private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"])]
     pub code_stdin: bool,
-    /// Read a Base32 TOTP secret; no one-time codes are calculated
-    #[arg(long, conflicts_with_all = ["private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"])]
+    /// Read an uppercase Base32 TOTP secret from a stdin line
+    ///
+    /// Accepts unpadded Base32 or canonical padding. Stores configuration only;
+    /// no one-time codes are calculated. Defaults: SHA-1, 6 digits, 30 seconds.
+    #[arg(long, help_heading = "TOTP", conflicts_with_all = ["private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"])]
     pub totp_stdin: bool,
-    #[arg(long, value_enum, requires = "totp_stdin")]
+    /// TOTP algorithm (default: sha1; requires --totp-stdin)
+    #[arg(long, help_heading = "TOTP", value_enum, requires = "totp_stdin")]
     pub algorithm: Option<TotpAlgorithmArg>,
-    #[arg(long, requires = "totp_stdin")]
+    /// TOTP code length: 6–8 digits (default: 6; requires --totp-stdin)
+    #[arg(long, help_heading = "TOTP", requires = "totp_stdin")]
     pub digits: Option<u8>,
-    /// TOTP period in seconds (default: 30)
-    #[arg(long, requires = "totp_stdin")]
+    /// Positive TOTP period in seconds (default: 30; requires --totp-stdin)
+    #[arg(long, help_heading = "TOTP", requires = "totp_stdin")]
     pub period: Option<u32>,
-    #[arg(long, value_hint = ValueHint::FilePath, conflicts_with = "private_key_stdin")]
+    /// Read a private SSH key from a UTF-8 file
+    ///
+    /// Preserves whitespace and line endings. The supplied field must not be
+    /// blank. May be combined with a public key source to store both parts.
+    #[arg(long, help_heading = "SSH", value_hint = ValueHint::FilePath, conflicts_with = "private_key_stdin")]
     pub private_key_file: Option<PathBuf>,
-    /// Read until EOF, or a line containing only '.' in interactive mode
-    #[arg(long)]
+    /// Read a private SSH key from stdin until EOF
+    ///
+    /// Preserves whitespace and line endings. Only one SSH field can use stdin
+    /// until EOF; use a file for the other part. The key must not be blank.
+    #[arg(long, help_heading = "SSH")]
     pub private_key_stdin: bool,
-    #[arg(long, value_hint = ValueHint::FilePath, conflicts_with = "public_key_stdin")]
+    /// Read a public SSH key from a UTF-8 file
+    ///
+    /// Preserves whitespace and line endings. The supplied field must not be
+    /// blank. May be combined with a private key source to store both parts.
+    #[arg(long, help_heading = "SSH", value_hint = ValueHint::FilePath, conflicts_with = "public_key_stdin")]
     pub public_key_file: Option<PathBuf>,
-    /// Read until EOF, or a line containing only '.' in interactive mode
-    #[arg(long)]
+    /// Read a public SSH key from stdin until EOF
+    ///
+    /// Preserves whitespace and line endings. Only one SSH field can use stdin
+    /// until EOF; use a file for the other part. The key must not be blank.
+    #[arg(long, help_heading = "SSH")]
     pub public_key_stdin: bool,
 }
 
 #[derive(Subcommand)]
 pub enum TagCommand {
+    /// Create a tag with a unique, nonempty name
     Add {
+        /// Unique, nonempty tag name
         #[arg(long)]
         name: String,
     },
+    /// List tag IDs and names, including technical names for missing entries
     List,
+    /// Delete a tag that is not used by any record
     Delete {
+        /// Tag ID from tag list
         tag_id: TagId,
     },
+    /// Rename a tag without changing its ID
     Rename {
+        /// Tag ID from tag list
         tag_id: TagId,
+        /// New unique, nonempty name
         #[arg(long)]
         name: String,
     },
     /// Rebuild a missing or damaged tag-name catalog using technical names
+    ///
+    /// Saves the currently known tags, including generated names such as
+    /// #tag-42. Lost original names are not reconstructed. For restoration
+    /// from usable backups, use vault recover instead.
     Recover,
 }
 

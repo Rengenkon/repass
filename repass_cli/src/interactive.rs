@@ -24,10 +24,11 @@ fn schema() -> clap::Command {
         .get_subcommands()
         .filter(|command| command.get_name() != "interactive")
         .cloned()
-        .map(hide_data_dir)
+        .map(session_help)
         .collect();
     let mut command = clap::Command::new("repass")
         .about("Session commands; use vault switch <DIR> to select a vault")
+        .after_help("Use help/h for help and quit/q to leave. Enter commands without the 'repass' prefix.\nMissing required arguments are prompted; optional arguments are not.")
         .styles(output::styles())
         .subcommand_required(true)
         .subcommands(subcommands)
@@ -54,16 +55,50 @@ fn optional_arguments(command: clap::Command) -> clap::Command {
         .mut_subcommands(optional_arguments)
 }
 
-fn hide_data_dir(command: clap::Command) -> clap::Command {
-    command
+const SESSION_INPUT_HELP: &str =
+    "Missing required arguments are prompted; optional arguments are not.";
+
+fn session_help(mut command: clap::Command) -> clap::Command {
+    let updating_record = command.get_name() == "update";
+    let short_footer = match command.get_after_help() {
+        Some(footer) => format!("{footer}\n\n{SESSION_INPUT_HELP}"),
+        None => SESSION_INPUT_HELP.to_owned(),
+    };
+    if let Some(footer) = command.get_after_long_help() {
+        // Completion examples run in the external shell, not in this session.
+        let footer = if command.get_name() == "completions" {
+            footer.to_string()
+        } else {
+            footer.to_string().replace("repass ", "")
+        };
+        command = command.after_long_help(format!("{footer}\n\n{SESSION_INPUT_HELP}"));
+    }
+    command.after_help(short_footer)
         .mut_args(|arg| {
-            if arg.get_id().as_str() == "data_dir" {
-                arg.hide(true)
-            } else {
-                arg
+            match arg.get_id().as_str() {
+                "data_dir" => arg.hide(true),
+                "password_stdin" if updating_record => arg
+                    .help("Add or replace the record's only password using hidden input")
+                    .long_help("Adds a password if none exists, or replaces the only password, using hidden input. With multiple passwords, use data-update with a data ID instead."),
+                "password_stdin" => arg
+                    .help("Enter one password using hidden input")
+                    .long_help("Requests the password using hidden terminal input. The master password is requested separately when opening the vault."),
+                "code_stdin" => arg
+                    .help("Enter a recovery code or other code using hidden input")
+                    .long_help("Requests one code using hidden terminal input. The code must not be blank."),
+                "totp_stdin" => arg
+                    .help("Enter an uppercase Base32 TOTP secret using hidden input")
+                    .long_help("Requests an uppercase Base32 TOTP secret using hidden terminal input. Accepts unpadded Base32 or canonical padding. Stores configuration only; no one-time codes are calculated. Defaults: SHA-1, 6 digits, 30 seconds."),
+                "private_key_stdin" => arg
+                    .help("Enter a private SSH key; finish with a line containing only '.'")
+                    .long_help("Uses ordinary multiline terminal input. Finish with a line containing only '.'. Whitespace and line endings are preserved; the terminator is not stored. EOF before the terminator cancels the operation. Both SSH parts may be entered separately."),
+                "public_key_stdin" => arg
+                    .help("Enter a public SSH key; finish with a line containing only '.'")
+                    .long_help("Uses ordinary multiline terminal input. Finish with a line containing only '.'. Whitespace and line endings are preserved; the terminator is not stored. EOF before the terminator cancels the operation. Both SSH parts may be entered separately."),
+                _ => arg,
             }
         })
-        .mut_subcommands(hide_data_dir)
+        .mut_subcommands(session_help)
 }
 
 fn uses_data_dir(command: &Command) -> bool {
@@ -109,7 +144,19 @@ fn parse(words: Vec<String>, input: &mut impl BufRead, output: &mut impl Write) 
     let strict = schema();
     let mut arguments = vec!["repass".to_owned()];
     arguments.extend(words);
-    let matches = optional_arguments(strict.clone()).try_get_matches_from(&arguments)?;
+    let matches = match optional_arguments(strict.clone()).try_get_matches_from(&arguments) {
+        Ok(matches) => matches,
+        Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp => {
+            // The relaxed parser exists only to gather arguments for prompting.
+            // Render help from the canonical schema, with required arguments.
+            return Err(strict
+                .try_get_matches_from(&arguments)
+                .err()
+                .unwrap_or(error)
+                .into());
+        }
+        Err(error) => return Err(error.into()),
+    };
     let mut missing = Vec::new();
     missing_arguments(&strict, &matches, &mut missing);
     for arg in missing {
@@ -241,17 +288,46 @@ mod tests {
 
     #[test]
     fn session_help_aliases_exclude_interactive_and_reject_it() {
-        for suffix in ["", " generate", " record add"] {
-            let help = schema()
-                .try_get_matches_from(shlex::split(&format!("repass help{suffix}")).unwrap())
-                .unwrap_err();
-            let alias = schema()
-                .try_get_matches_from(shlex::split(&format!("repass h{suffix}")).unwrap())
-                .unwrap_err();
+        for suffix in [
+            "",
+            " generate",
+            " record add",
+            " record data-update",
+            " vault switch",
+            " completions",
+        ] {
+            let help = parse(
+                shlex::split(&format!("help{suffix}")).unwrap(),
+                &mut Cursor::new(""),
+                &mut Vec::new(),
+            )
+            .err()
+            .unwrap()
+            .downcast::<clap::Error>()
+            .unwrap();
+            let alias = parse(
+                shlex::split(&format!("h{suffix}")).unwrap(),
+                &mut Cursor::new(""),
+                &mut Vec::new(),
+            )
+            .err()
+            .unwrap()
+            .downcast::<clap::Error>()
+            .unwrap();
             assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
             assert_eq!(help.to_string(), alias.to_string());
             if suffix.is_empty() {
                 assert!(!help.to_string().contains("interactive"));
+            }
+            if suffix == " record data-update" {
+                let text = help.to_string();
+                assert!(text.contains("<RECORD_ID> <DATA_ID>"));
+                assert!(!text.contains("[RECORD_ID]"));
+                assert!(text.contains(SESSION_INPUT_HELP));
+                assert!(text.contains("line containing only '.'"));
+                assert!(!text.contains("stdin until EOF"));
+                assert!(text.contains("data-update 1 2 --private-key-file"));
+                assert!(!text.contains("repass record data-update 1 2"));
             }
         }
         for words in [
@@ -261,6 +337,28 @@ mod tests {
         ] {
             let error = schema().try_get_matches_from(words).unwrap_err();
             assert_ne!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+        }
+    }
+
+    #[test]
+    fn session_help_flags_keep_required_ids_and_do_not_prompt() {
+        for flag in ["-h", "--help"] {
+            let mut output = Vec::new();
+            let error = parse(
+                vec!["record".into(), "data-update".into(), flag.into()],
+                &mut Cursor::new(""),
+                &mut output,
+            )
+            .err()
+            .unwrap()
+            .downcast::<clap::Error>()
+            .unwrap();
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+            let text = error.to_string();
+            assert!(text.contains("<RECORD_ID> <DATA_ID>"));
+            assert!(!text.contains("--data-dir"));
+            assert!(text.contains(SESSION_INPUT_HELP));
+            assert!(output.is_empty());
         }
     }
 

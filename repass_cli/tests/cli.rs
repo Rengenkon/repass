@@ -376,8 +376,13 @@ fn separator_help_is_numbered_and_descriptive() {
         ] {
             assert!(text.contains(choice), "{text}");
         }
-        assert!(text.contains("between dictionary entries"));
-        assert!(text.contains("Unicode scalar values"));
+        if flag == "--help" {
+            assert!(text.contains("between dictionary entries"));
+            assert!(text.contains("Specify --length or both --min-length and --max-length"));
+            assert!(text.contains("Examples:"));
+        } else {
+            assert!(!text.contains("Examples:"));
+        }
         assert!(text.contains("--separator-interval"));
         assert!(text.contains("--separator-count"));
     }
