@@ -114,8 +114,7 @@ fn parse(words: Vec<String>, input: &mut impl BufRead, output: &mut impl Write) 
     missing_arguments(&strict, &matches, &mut missing);
     for arg in missing {
         let value = if arg.flag {
-            // --password-stdin is mandatory for add. Supply the flag and let the
-            // shared executor request the password with hidden terminal input.
+            // Supply a required flag; the executor handles its input.
             None
         } else {
             if arg.name == "separator_kind" {
@@ -356,7 +355,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(command, Command::Record { command: commands::RecordCommand::Add { name, password_stdin: true, .. }, .. } if name == "My mail")
+            matches!(command, Command::Record { command: commands::RecordCommand::Add { name, data, .. }, .. } if name == "My mail" && !data.password_stdin)
         );
     }
 

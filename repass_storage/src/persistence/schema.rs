@@ -1,15 +1,16 @@
-use crate::record::RecordId;
-use crate::record::types::Timestamp;
+use crate::record::types::{Host, Timestamp};
+use crate::record::{RecordData, RecordId};
 use crate::tags::TagId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct PersistedRecord<S = String, T = Vec<TagId>> {
+pub(crate) struct PersistedRecord<S = String, T = Vec<TagId>, D = Vec<RecordData>, H = Host> {
     pub id: RecordId,
     pub name: S,
-    pub password: S,
+    pub data: D,
+    pub next_data_id: Option<u64>,
     pub username: Option<S>,
-    pub url: Option<S>,
+    pub host: Option<H>,
     pub notes: Option<S>,
     pub tags: T,
     pub created: Timestamp,
@@ -23,7 +24,8 @@ pub(crate) struct PersistedRecords<R = PersistedRecord> {
 }
 
 /// Borrowed views reuse the same canonical field definitions and ordering.
-pub(crate) type PersistedRecordRef<'a> = PersistedRecord<&'a str, &'a [TagId]>;
+pub(crate) type PersistedRecordRef<'a> =
+    PersistedRecord<&'a str, &'a [TagId], &'a [RecordData], &'a Host>;
 pub(crate) type PersistedRecordsRef<'a> = PersistedRecords<PersistedRecordRef<'a>>;
 
 #[derive(Deserialize, Serialize)]

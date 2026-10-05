@@ -1,7 +1,7 @@
 use crate::StorageError;
 use crate::persistence::vault::{backup_path, preserve_damaged};
 use crate::persistence::{PersistedRecords, PersistedTag, PersistedTags, Vault, VaultCounts};
-use crate::record::types::Timestamp;
+use crate::record::types::{Host, Timestamp};
 use crate::record::{NewRecord, RecordId, RecordPatch, RecordView, Records};
 use crate::tags::{Tag, TagId, Tags};
 use std::fs::{self, File, TryLockError};
@@ -14,7 +14,9 @@ const TAGS_FILE: &str = "tags.repass";
 const LEGACY_FILE: &str = "vault.repass";
 const RECORDS_KIND: &str = "records";
 const TAGS_KIND: &str = "tags";
-const DATA_SCHEMA_VERSION: u16 = 1;
+// Record schema 2 deliberately breaks compatibility with password-only records.
+const DATA_SCHEMA_VERSION: u16 = 2;
+const TAGS_SCHEMA_VERSION: u16 = 1;
 
 /// State of the optional tag-name file.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -129,7 +131,7 @@ impl Storage {
         let (tags, tag_catalog_status) = match vault.load_data_file::<PersistedTags>(
             directory.join(TAGS_FILE),
             TAGS_KIND,
-            DATA_SCHEMA_VERSION,
+            TAGS_SCHEMA_VERSION,
         ) {
             Ok(persisted) => {
                 let stored = persisted
@@ -243,12 +245,25 @@ impl Storage {
         name: Option<&str>,
         tags: &[TagId],
     ) -> Result<Vec<RecordView<'_>>, StorageError> {
+        self.search_records_by_host(name, None, tags)
+    }
+
+    /// Exact name and host matching, with the intersection of requested tags.
+    pub fn search_records_by_host(
+        &self,
+        name: Option<&str>,
+        host: Option<&Host>,
+        tags: &[TagId],
+    ) -> Result<Vec<RecordView<'_>>, StorageError> {
+        if let Some(host) = host {
+            host.validate()?;
+        }
         for tag in tags {
             if self.tags.get(*tag).is_none() {
                 return Err(StorageError::TagNotFound(*tag));
             }
         }
-        Ok(self.records.filtered_views(name, tags))
+        Ok(self.records.filtered_views(name, host, tags))
     }
 
     pub fn get_record(&self, id: RecordId) -> Result<RecordView<'_>, StorageError> {
@@ -377,7 +392,7 @@ impl Storage {
             vault.restore_data_file(&records, RECORDS_KIND, DATA_SCHEMA_VERSION)?;
         }
         if restore_tags {
-            vault.restore_data_file(&tags, TAGS_KIND, DATA_SCHEMA_VERSION)?;
+            vault.restore_data_file(&tags, TAGS_KIND, TAGS_SCHEMA_VERSION)?;
         }
         if restore_metadata {
             preserve_damaged(&metadata)?;
@@ -483,7 +498,7 @@ impl Storage {
         self.vault.save_data_file(
             self.directory.join(TAGS_FILE),
             TAGS_KIND,
-            DATA_SCHEMA_VERSION,
+            TAGS_SCHEMA_VERSION,
             &persisted,
         )?;
         Ok(())
@@ -569,7 +584,7 @@ fn validate_records_file(vault: &Vault, path: &Path) -> Result<Records, StorageE
 }
 
 fn validate_tags_file(vault: &Vault, path: &Path, used: &[TagId]) -> Result<(), StorageError> {
-    let persisted: PersistedTags = vault.load_data_file(path, TAGS_KIND, DATA_SCHEMA_VERSION)?;
+    let persisted: PersistedTags = vault.load_data_file(path, TAGS_KIND, TAGS_SCHEMA_VERSION)?;
     Tags::from_catalog(
         persisted.tags.into_iter().map(|tag| (tag.id, tag.name)),
         used.iter().copied(),
@@ -622,12 +637,188 @@ mod tests {
     fn record(name: &str, tags: Vec<TagId>) -> NewRecord {
         NewRecord {
             name: name.to_owned(),
-            password: format!("{name}-secret"),
+            data: vec![crate::Data::Password(format!("{name}-secret"))],
             username: Some("user".to_owned()),
-            url: Some("https://example.test".to_owned()),
+            host: Some("example.test".parse().unwrap()),
             notes: None,
             tags,
         }
+    }
+
+    #[test]
+    fn mixed_secret_data_survives_save_reopen_and_recovery_with_stable_ids() {
+        use crate::{Data, DataId, SshKey, Totp, TotpAlgorithm};
+        let directory = TestDirectory::new();
+        let data = vec![
+            Data::Password("猫-password".into()),
+            Data::SshKey(
+                SshKey::new(
+                    Some("private\r\nkey  \r\n".into()),
+                    Some("ssh-ed25519 public\n".into()),
+                )
+                .unwrap(),
+            ),
+            Data::SshKey(SshKey::new(None, Some("public only\n".into())).unwrap()),
+            Data::SshKey(SshKey::new(Some("private only\n".into()), None).unwrap()),
+            Data::Totp(Totp::new("MZXW6YTB".into(), TotpAlgorithm::Sha512, 8, 60).unwrap()),
+            Data::Code("code-a".into()),
+            Data::Code("code-b".into()),
+        ];
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let id = storage
+            .create_record(NewRecord {
+                name: "mixed".into(),
+                data: data.clone(),
+                username: None,
+                host: Some("Example.TEST.".parse().unwrap()),
+                notes: None,
+                tags: vec![],
+            })
+            .unwrap();
+        storage
+            .update_record(
+                id,
+                RecordPatch {
+                    remove_data: vec![DataId::new(6)],
+                    ..RecordPatch::default()
+                },
+            )
+            .unwrap();
+        storage
+            .update_record(
+                id,
+                RecordPatch {
+                    add_data: vec![Data::Code("code-c".into())],
+                    ..RecordPatch::default()
+                },
+            )
+            .unwrap();
+        let expected = storage.get_record(id).unwrap().data().to_vec();
+        assert_eq!(expected.last().unwrap().id, DataId::new(8));
+        let created = *storage.get_record(id).unwrap().created;
+        drop(storage);
+        let mut storage = Storage::open_in(&directory.0, b"master").unwrap();
+        assert!(storage.get_record(id).unwrap().data() == expected);
+        assert_eq!(*storage.get_record(id).unwrap().created, created);
+        assert_eq!(
+            storage
+                .search_records_by_host(None, Some(&"example.test".parse().unwrap()), &[])
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            storage
+                .search_records_by_host(None, Some(&"127.0.0.1".parse().unwrap()), &[])
+                .unwrap()
+                .is_empty()
+        );
+        // The backup now contains the reopened mixed record.
+        storage
+            .update_record(
+                id,
+                RecordPatch {
+                    notes: crate::FieldUpdate::Set("latest".into()),
+                    ..RecordPatch::default()
+                },
+            )
+            .unwrap();
+        drop(storage);
+        fs::write(directory.0.join(RECORDS_FILE), b"damaged").unwrap();
+        let mut storage = Storage::recover_in(&directory.0, b"master").unwrap();
+        assert!(storage.get_record(id).unwrap().data() == expected);
+        assert_eq!(storage.get_record(id).unwrap().notes, None);
+        storage
+            .update_record(
+                id,
+                RecordPatch {
+                    add_data: vec![Data::Code("after recovery".into())],
+                    ..RecordPatch::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            storage.get_record(id).unwrap().data().last().unwrap().id,
+            DataId::new(9)
+        );
+        let ssh_only = storage
+            .create_record(NewRecord {
+                name: "ssh only".into(),
+                data: vec![data[1].clone()],
+                username: None,
+                host: Some("2001:db8::1".parse().unwrap()),
+                notes: None,
+                tags: vec![],
+            })
+            .unwrap();
+        assert_eq!(
+            storage
+                .search_records_by_host(None, Some(&"2001:0db8::1".parse().unwrap()), &[])
+                .unwrap()[0]
+                .id,
+            ssh_only
+        );
+    }
+
+    #[test]
+    fn failed_data_write_rolls_back_values_and_id_sequence() {
+        use crate::{Data, DataId};
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let id = storage.create_record(record("original", vec![])).unwrap();
+        let before = storage.get_record(id).unwrap().data().to_vec();
+        let backup = backup_path(&directory.0.join(RECORDS_FILE));
+        fs::remove_file(&backup).unwrap();
+        fs::create_dir(&backup).unwrap();
+        assert!(
+            storage
+                .update_record(
+                    id,
+                    RecordPatch {
+                        name: Some("changed".into()),
+                        add_data: vec![Data::Code("new".into())],
+                        replace_data: vec![(DataId::new(1), Data::Password("replacement".into()))],
+                        ..RecordPatch::default()
+                    }
+                )
+                .is_err()
+        );
+        assert!(storage.get_record(id).unwrap().data() == before);
+        assert_eq!(storage.get_record(id).unwrap().name, "original");
+        fs::remove_dir(&backup).unwrap();
+        storage
+            .update_record(
+                id,
+                RecordPatch {
+                    add_data: vec![Data::Code("saved".into())],
+                    ..RecordPatch::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(storage.get_record(id).unwrap().data()[1].id, DataId::new(2));
+    }
+
+    #[test]
+    fn unsupported_record_schema_is_rejected_without_rewriting_it() {
+        let directory = TestDirectory::new();
+        let storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let path = directory.0.join(RECORDS_FILE);
+        storage
+            .vault
+            .save_data_file(&path, RECORDS_KIND, 1, &storage.records.persisted_view())
+            .unwrap();
+        let bytes = fs::read(&path).unwrap();
+        drop(storage);
+        assert!(matches!(
+            Storage::open_in(&directory.0, b"master"),
+            Err(StorageError::Vault(
+                crate::VaultError::DataVersionMismatch {
+                    expected: 2,
+                    actual: 1
+                }
+            ))
+        ));
+        assert_eq!(fs::read(path).unwrap(), bytes);
     }
 
     #[test]
@@ -730,7 +921,9 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, first);
         assert_eq!(records[0].notes, Some("updated"));
-        assert_eq!(records[0].password(), "mail-secret");
+        assert!(
+            matches!(&records[0].data()[0].value, crate::Data::Password(value) if value == "mail-secret")
+        );
         assert_eq!(reopened.find_records_by_name("mail"), vec![first]);
         assert_eq!(reopened.find_records_with_tags(&[tag]), vec![first]);
         assert_eq!(reopened.info().record_count, 1);
@@ -791,9 +984,13 @@ mod tests {
             records: vec![PersistedRecord {
                 id: RecordId::new(1),
                 name: "legacy reference".into(),
-                password: "secret".into(),
+                data: vec![crate::RecordData {
+                    id: crate::DataId::new(1),
+                    value: crate::Data::Password("secret".into()),
+                }],
+                next_data_id: Some(2),
                 username: None,
-                url: None,
+                host: None,
                 notes: None,
                 tags: vec![technical_id],
                 created: Timestamp::from_unix_millis(1),

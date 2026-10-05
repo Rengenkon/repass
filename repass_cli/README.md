@@ -9,12 +9,15 @@ repass vault [--data-dir <DIR>] info
 repass vault [--data-dir <DIR>] change-password
 repass vault [--data-dir <DIR>] recover
 repass vault [--data-dir <DIR>] finish-init
-repass record [--data-dir <DIR>] add --name <NAME> --password-stdin [--username <TEXT>] [--url <URL>] [--notes <TEXT>] [--tag <TAG_ID>...]
-repass record [--data-dir <DIR>] list [--name <NAME>] [--tag <TAG_ID>...]
-repass record [--data-dir <DIR>] find [--name <NAME>] [--tag <TAG_ID>...]
+repass record [--data-dir <DIR>] add --name <NAME> [<DATA_SOURCE>] [--username <TEXT>] [--host <HOST>] [--notes <TEXT>] [--tag <TAG_ID>...]
+repass record [--data-dir <DIR>] list [--name <NAME>] [--host <HOST>] [--tag <TAG_ID>...]
+repass record [--data-dir <DIR>] find [--name <NAME>] [--host <HOST>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] show <RECORD_ID> [--reveal]
-repass record [--data-dir <DIR>] update <RECORD_ID> [--name <NAME>] [--username <TEXT> | --clear-username] [--url <URL> | --clear-url] [--notes <TEXT> | --clear-notes] [--password-stdin] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
+repass record [--data-dir <DIR>] update <RECORD_ID> [--name <NAME>] [--username <TEXT> | --clear-username] [--host <HOST> | --clear-host] [--notes <TEXT> | --clear-notes] [--password-stdin] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
 repass record [--data-dir <DIR>] delete <RECORD_ID>
+repass record [--data-dir <DIR>] data-add <RECORD_ID> <DATA_SOURCE>
+repass record [--data-dir <DIR>] data-update <RECORD_ID> <DATA_ID> <DATA_SOURCE>
+repass record [--data-dir <DIR>] data-delete <RECORD_ID> <DATA_ID>
 repass tag [--data-dir <DIR>] add --name <NAME>
 repass tag [--data-dir <DIR>] list
 repass tag [--data-dir <DIR>] delete <TAG_ID>
@@ -34,7 +37,7 @@ data directory.
 `repass` without a command displays help. Use `repass interactive` to start a
 session. Enter the same commands
 without the `repass` prefix; quotes preserve spaces. Missing mandatory arguments
-are prompted. The master password and record passwords are requested with hidden
+are prompted. The master password, passwords, codes and TOTP secrets are requested with hidden
 terminal input. In a one-shot invocation, `--password-stdin` reads one record
 password line from stdin (removing its line ending).
 Optional arguments are not prompted. Use `h` or `help` for help (including
@@ -45,6 +48,61 @@ The `interactive` command is unavailable and absent from help inside a session.
 Inside a session, ordinary commands cannot accept `--data-dir`. Use
 `vault switch <DIR>` to close the old vault and change the session's directory.
 Opening and decryption are lazy; generation and help do not open a vault.
+
+## Record contents
+
+A record can contain any number of passwords, SSH keys, TOTP configurations and
+codes, including several values of the same type. A password is not mandatory;
+records can also start with no data. Each element has a stable ID within its
+record. Deleted data IDs are not reused, including after reopening the vault.
+`list` and `find` show `ID:type` summaries. `show` masks all values unless
+`--reveal` is supplied; TOTP algorithm, digit count and period remain visible.
+
+`<DATA_SOURCE>` selects one type per operation:
+
+```text
+--password-stdin
+--code-stdin
+--totp-stdin [--algorithm sha1|sha256|sha512] [--digits 6|7|8] [--period <SECONDS>]
+[--private-key-file <FILE> | --private-key-stdin] [--public-key-file <FILE> | --public-key-stdin]
+```
+
+One-shot passwords, codes and TOTP secrets consume one stdin line, removing its
+line ending. TOTP secrets must be uppercase RFC 4648 Base32, either unpadded or
+with canonical padding. Defaults are SHA-1, 6 digits and a 30-second period;
+periods must be positive. This release stores configuration only and does not
+calculate one-time codes.
+
+SSH values contain a private key, a public key, or both. At least one field is
+required and supplied fields cannot be blank. Files must be UTF-8. Key text,
+including whitespace and line endings, is preserved; cryptographic key structure
+is not parsed. In one-shot mode, a key read from stdin consumes input until EOF;
+only one key field can use stdin, and the other can come from a file. In an
+interactive session, each requested key field uses ordinary multiline terminal
+input, terminated by a line containing only `.`. The terminator is not stored,
+and EOF before it cancels the operation.
+
+`data-update` replaces the entire element while retaining its ID. To replace an
+SSH pair and keep both parts, provide both parts again; to retain only the public
+part, provide only that part. `data-delete` removes the entire element. The
+`update --password-stdin` shortcut adds a password if none exists, or replaces
+the only password. With multiple passwords, use `data-update` and its data ID.
+
+`--host` replaces the former `--url`: it accepts an IP address or domain without
+protocol, port or path. Host filters combine with exact names and tag
+intersection. IP addresses compare by their parsed value; domains compare
+case-insensitively, ignoring a trailing dot. No DNS lookup is performed.
+
+Examples (master-password input is handled separately by the CLI):
+
+```text
+repass record add --name server --host example.test --private-key-file id_ed25519 --public-key-file id_ed25519.pub
+repass record data-add 1 --totp-stdin --algorithm sha256 --digits 8
+repass record data-add 1 --code-stdin
+repass record find --host EXAMPLE.TEST.
+repass record show 1 --reveal
+repass record data-delete 1 2
+```
 
 ## Colors
 
@@ -162,6 +220,10 @@ data-file format versions are accepted; older or unknown versions are rejected
 without migration. Current data-file headers authenticate the schema version,
 allowing an unsupported data schema to be reported distinctly from an
 authentication failure.
+Record schema version 2 stores typed data, per-record data-ID allocation state
+and a host. It deliberately breaks compatibility with password-only record
+schema version 1; existing schema-1 vaults are rejected and are not migrated.
+Tag schema version 1 and the metadata/data container format versions are unchanged.
 Vault sessions hold an exclusive advisory lock on the data directory. A second
 session opening the same directory receives an error until the first closes.
 Directory locking and directory synchronization are supported on the Linux/Unix

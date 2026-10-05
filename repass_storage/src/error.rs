@@ -1,5 +1,5 @@
 use crate::VaultError;
-use crate::record::RecordId;
+use crate::record::{DataId, RecordId};
 use crate::tags::TagId;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -14,6 +14,10 @@ pub enum StorageError {
     DuplicateRecordId(RecordId),
     RecordIdExhausted,
     RecordNotFound(RecordId),
+    DataIdExhausted,
+    DataNotFound(DataId),
+    DuplicateDataId(DataId),
+    ConflictingDataUpdate(DataId),
     DuplicateTagId(TagId),
     DuplicateTagName(String),
     TagIdExhausted,
@@ -42,6 +46,12 @@ impl Display for StorageError {
             Self::DuplicateRecordId(id) => write!(formatter, "duplicate record ID {id}"),
             Self::RecordIdExhausted => formatter.write_str("record ID space is exhausted"),
             Self::RecordNotFound(id) => write!(formatter, "record {id} was not found"),
+            Self::DataIdExhausted => formatter.write_str("record data ID space is exhausted"),
+            Self::DataNotFound(id) => write!(formatter, "record data {id} was not found"),
+            Self::DuplicateDataId(id) => write!(formatter, "duplicate record data ID {id}"),
+            Self::ConflictingDataUpdate(id) => {
+                write!(formatter, "record data {id} was targeted more than once")
+            }
             Self::DuplicateTagId(id) => write!(formatter, "duplicate tag ID {id}"),
             Self::DuplicateTagName(name) => write!(formatter, "tag name {name:?} already exists"),
             Self::TagIdExhausted => formatter.write_str("tag ID space is exhausted"),

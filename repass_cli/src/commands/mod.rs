@@ -1,6 +1,6 @@
 use crate::{Result, output, session::Session};
 use clap::{Args, Parser, Subcommand, ValueEnum, ValueHint};
-use repass_storage::{RecordId, TagId};
+use repass_storage::{DataId, Host, RecordId, TagId};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -222,19 +222,20 @@ pub enum RecordCommand {
     Add {
         #[arg(long)]
         name: String,
-        /// Read a password line from stdin; interactive mode uses hidden input
-        #[arg(long, required = true)]
-        password_stdin: bool,
+        #[command(flatten)]
+        data: DataInput,
         #[arg(long)]
         username: Option<String>,
         #[arg(long)]
-        url: Option<String>,
+        host: Option<Host>,
         #[arg(long)]
         notes: Option<String>,
         #[arg(long, num_args = 1..)]
         tag: Vec<TagId>,
     },
     List {
+        #[arg(long)]
+        host: Option<Host>,
         #[arg(long, num_args = 1..)]
         tag: Vec<TagId>,
         #[arg(long)]
@@ -243,13 +244,15 @@ pub enum RecordCommand {
     /// Find records by exact name and/or every requested tag
     Find {
         #[arg(long)]
+        host: Option<Host>,
+        #[arg(long)]
         name: Option<String>,
         #[arg(long, num_args = 1..)]
         tag: Vec<TagId>,
     },
     Show {
         record_id: String,
-        /// Include the password in the output
+        /// Include secret values in the output
         #[arg(long)]
         reveal: bool,
     },
@@ -260,13 +263,13 @@ pub enum RecordCommand {
         #[arg(long)]
         username: Option<String>,
         #[arg(long)]
-        url: Option<String>,
+        host: Option<Host>,
         #[arg(long)]
         notes: Option<String>,
         #[arg(long, conflicts_with = "username")]
         clear_username: bool,
-        #[arg(long, conflicts_with = "url")]
-        clear_url: bool,
+        #[arg(long, conflicts_with = "host")]
+        clear_host: bool,
         #[arg(long, conflicts_with = "notes")]
         clear_notes: bool,
         #[arg(long)]
@@ -279,6 +282,62 @@ pub enum RecordCommand {
     Delete {
         record_id: String,
     },
+    /// Append a typed value to a record
+    DataAdd {
+        record_id: String,
+        #[command(flatten)]
+        data: DataInput,
+    },
+    /// Replace a typed value while retaining its stable ID
+    DataUpdate {
+        record_id: String,
+        data_id: DataId,
+        #[command(flatten)]
+        data: DataInput,
+    },
+    /// Delete one typed value; its ID will not be reused
+    DataDelete {
+        record_id: String,
+        data_id: DataId,
+    },
+}
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+pub enum TotpAlgorithmArg {
+    #[default]
+    Sha1,
+    Sha256,
+    Sha512,
+}
+
+#[derive(Args, Default)]
+pub struct DataInput {
+    /// Read one password line (hidden terminal input in interactive mode)
+    #[arg(long, conflicts_with_all = ["code_stdin", "totp_stdin", "private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"])]
+    pub password_stdin: bool,
+    /// Read one recovery/code line (hidden terminal input in interactive mode)
+    #[arg(long, conflicts_with_all = ["totp_stdin", "private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"])]
+    pub code_stdin: bool,
+    /// Read a Base32 TOTP secret; no one-time codes are calculated
+    #[arg(long, conflicts_with_all = ["private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"])]
+    pub totp_stdin: bool,
+    #[arg(long, value_enum, requires = "totp_stdin")]
+    pub algorithm: Option<TotpAlgorithmArg>,
+    #[arg(long, requires = "totp_stdin")]
+    pub digits: Option<u8>,
+    /// TOTP period in seconds (default: 30)
+    #[arg(long, requires = "totp_stdin")]
+    pub period: Option<u32>,
+    #[arg(long, value_hint = ValueHint::FilePath, conflicts_with = "private_key_stdin")]
+    pub private_key_file: Option<PathBuf>,
+    /// Read until EOF, or a line containing only '.' in interactive mode
+    #[arg(long)]
+    pub private_key_stdin: bool,
+    #[arg(long, value_hint = ValueHint::FilePath, conflicts_with = "public_key_stdin")]
+    pub public_key_file: Option<PathBuf>,
+    /// Read until EOF, or a line containing only '.' in interactive mode
+    #[arg(long)]
+    pub public_key_stdin: bool,
 }
 
 #[derive(Subcommand)]
@@ -460,7 +519,7 @@ fn success(output: &mut impl Write, message: impl std::fmt::Display) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use repass_storage::{NewRecord, Storage};
+    use repass_storage::{Data, NewRecord, Storage};
     use std::fs;
     use std::io::Cursor;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -496,9 +555,12 @@ mod tests {
                 data_dir: None,
                 command: RecordCommand::Add {
                     name: "mail".into(),
-                    password_stdin: true,
+                    data: DataInput {
+                        password_stdin: true,
+                        ..DataInput::default()
+                    },
                     username: Some("alice".into()),
-                    url: None,
+                    host: None,
                     notes: None,
                     tag: Vec::new(),
                 },
@@ -562,9 +624,9 @@ mod tests {
         storage
             .create_record(NewRecord {
                 name: "mail".into(),
-                password: "secret".into(),
+                data: vec![Data::Password("secret".into())],
                 username: None,
-                url: None,
+                host: None,
                 notes: None,
                 tags: vec![tag_id],
             })
@@ -629,9 +691,9 @@ mod tests {
             .unwrap()
             .create_record(NewRecord {
                 name: "mail".into(),
-                password: "secret".into(),
+                data: vec![Data::Password("secret".into())],
                 username: Some("alice".into()),
-                url: Some("https://example.test".into()),
+                host: Some("example.test".parse().unwrap()),
                 notes: Some("note".into()),
                 tags: Vec::new(),
             })
@@ -644,10 +706,10 @@ mod tests {
                     record_id: id.to_string(),
                     name: None,
                     username: None,
-                    url: None,
+                    host: None,
                     notes: None,
                     clear_username: true,
-                    clear_url: true,
+                    clear_host: true,
                     clear_notes: true,
                     password_stdin: false,
                     add_tag: Vec::new(),
@@ -667,7 +729,7 @@ mod tests {
             .get_record(id)
             .unwrap();
         assert_eq!(record.username, None);
-        assert_eq!(record.url, None);
+        assert_eq!(record.host, None);
         assert_eq!(record.notes, None);
     }
 
@@ -685,9 +747,12 @@ mod tests {
                 data_dir: None,
                 command: RecordCommand::Add {
                     name: "mail".into(),
-                    password_stdin: true,
+                    data: DataInput {
+                        password_stdin: true,
+                        ..DataInput::default()
+                    },
                     username: None,
-                    url: None,
+                    host: None,
                     notes: None,
                     tag: Vec::new(),
                 },
@@ -703,14 +768,9 @@ mod tests {
         assert!(text.contains("Master password:"));
         assert!(text.contains("Password:"));
         assert!(!text.contains("record-secret"));
-        assert_eq!(
-            session
-                .ensure_storage(&mut Vec::new(), true)
-                .unwrap()
-                .get_record(RecordId::new(1))
-                .unwrap()
-                .password(),
-            "record-secret"
+        let storage = session.ensure_storage(&mut Vec::new(), true).unwrap();
+        assert!(
+            matches!(&storage.get_record(RecordId::new(1)).unwrap().data()[0].value, Data::Password(value) if value == "record-secret")
         );
     }
 
@@ -783,9 +843,9 @@ mod tests {
         let b = storage.create_tag("b").unwrap();
         let make = |name: &str, tags| NewRecord {
             name: name.into(),
-            password: "hidden-secret".into(),
+            data: vec![Data::Password("hidden-secret".into())],
             username: None,
-            url: None,
+            host: None,
             notes: None,
             tags,
         };
@@ -797,6 +857,7 @@ mod tests {
             Command::Record {
                 data_dir: None,
                 command: RecordCommand::Find {
+                    host: None,
                     name: Some("wanted".into()),
                     tag: vec![a, b],
                 },
@@ -811,5 +872,243 @@ mod tests {
         assert!(text.contains("wanted"));
         assert!(!text.contains("other"));
         assert!(!text.contains("hidden-secret"));
+    }
+
+    fn run_record_line(
+        line: &str,
+        input: &str,
+        session: &mut Session,
+        interactive: bool,
+    ) -> Result<String> {
+        let words = shlex::split(&format!("repass record {line}")).unwrap();
+        let command = Cli::try_parse_from(words)?.command.unwrap();
+        let mut output = Vec::new();
+        execute(
+            command,
+            session,
+            &mut Cursor::new(input),
+            &mut output,
+            interactive,
+        )?;
+        Ok(String::from_utf8(output).unwrap())
+    }
+
+    #[test]
+    fn typed_data_commands_support_files_stdin_mutation_search_and_masking() {
+        let directory = TestDirectory::new();
+        let storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let public_path = directory.0.join("public key.pub");
+        fs::write(&public_path, "ssh-ed25519 public-secret comment\n").unwrap();
+        let mut session = Session::with_storage(directory.0.clone(), storage);
+        let private = "-----BEGIN OPENSSH PRIVATE KEY-----\r\nprivate-secret  \r\n-----END OPENSSH PRIVATE KEY-----\r\n";
+        let add = format!(
+            "add --name ssh --host Example.TEST. --private-key-stdin --public-key-file '{}'",
+            public_path.display()
+        );
+        run_record_line(&add, private, &mut session, false).unwrap();
+        {
+            let storage = session.ensure_storage(&mut Vec::new(), false).unwrap();
+            let view = storage.get_record(RecordId::new(1)).unwrap();
+            assert_eq!(view.data().len(), 1);
+            assert!(
+                matches!(&view.data()[0].value, Data::SshKey(key) if key.private_key.as_deref() == Some(private) && key.public_key.as_deref() == Some("ssh-ed25519 public-secret comment\n"))
+            );
+        }
+        run_record_line(
+            "data-add 1 --totp-stdin --algorithm sha256 --digits 8 --period 60",
+            "MZXW6YTB\n",
+            &mut session,
+            false,
+        )
+        .unwrap();
+        run_record_line(
+            "data-add 1 --code-stdin",
+            "recovery-secret\n",
+            &mut session,
+            false,
+        )
+        .unwrap();
+        run_record_line(
+            "data-add 1 --password-stdin",
+            "password-secret\n",
+            &mut session,
+            false,
+        )
+        .unwrap();
+        let masked = run_record_line("show 1", "", &mut session, false).unwrap();
+        let listed = run_record_line("list --host example.test", "", &mut session, false).unwrap();
+        assert!(listed.contains("1:ssh, 2:totp, 3:code, 4:password"));
+        assert!(
+            run_record_line("find --host other.test", "", &mut session, false)
+                .unwrap()
+                .is_empty()
+        );
+        for secret in [
+            "private-secret",
+            "public-secret",
+            "MZXW6YTB",
+            "recovery-secret",
+            "password-secret",
+        ] {
+            assert!(!masked.contains(secret));
+            assert!(!listed.contains(secret));
+            assert!(
+                run_record_line("show 1 --reveal", "", &mut session, false)
+                    .unwrap()
+                    .contains(secret)
+            );
+        }
+        // Replacement can retain just the public part of an SSH value.
+        run_record_line(
+            "data-update 1 1 --public-key-stdin",
+            "new-public\n",
+            &mut session,
+            false,
+        )
+        .unwrap();
+        run_record_line("data-delete 1 3", "", &mut session, false).unwrap();
+        run_record_line("data-add 1 --code-stdin", "new-code\n", &mut session, false).unwrap();
+        assert!(
+            run_record_line("list", "", &mut session, false)
+                .unwrap()
+                .contains("1:ssh, 2:totp, 4:password, 5:code")
+        );
+        assert!(run_record_line("data-add 1", "", &mut session, false).is_err());
+        assert!(
+            run_record_line("data-update 1 99 --code-stdin", "x\n", &mut session, false).is_err()
+        );
+        assert!(
+            run_record_line(
+                "data-add 1 --totp-stdin",
+                "invalid-secret\n",
+                &mut session,
+                false
+            )
+            .is_err()
+        );
+        session.close();
+        let storage = Storage::open_in(&directory.0, b"master").unwrap();
+        let view = storage.get_record(RecordId::new(1)).unwrap();
+        assert!(
+            matches!(&view.data()[0].value, Data::SshKey(key) if key.private_key.is_none() && key.public_key.as_deref() == Some("new-public\n"))
+        );
+        assert!(
+            matches!(&view.data()[1].value, Data::Totp(totp) if totp.algorithm == repass_storage::TotpAlgorithm::Sha256 && totp.digits == 8 && totp.period == 60)
+        );
+    }
+
+    #[test]
+    fn interactive_ssh_accepts_both_key_parts_and_does_not_consume_next_command() {
+        let directory = TestDirectory::new();
+        let storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let mut session = Session::with_storage(directory.0.clone(), storage);
+        let command = Cli::try_parse_from([
+            "repass",
+            "record",
+            "add",
+            "--name",
+            "ssh",
+            "--private-key-stdin",
+            "--public-key-stdin",
+        ])
+        .unwrap()
+        .command
+        .unwrap();
+        let mut input = Cursor::new("private\r\nkey  \r\n.\r\npublic\n.\nnext-command\n");
+        let mut output = Vec::new();
+        execute(command, &mut session, &mut input, &mut output, true).unwrap();
+        let storage = session.ensure_storage(&mut Vec::new(), true).unwrap();
+        assert!(
+            matches!(&storage.get_record(RecordId::new(1)).unwrap().data()[0].value, Data::SshKey(key) if key.private_key.as_deref() == Some("private\r\nkey  \r\n") && key.public_key.as_deref() == Some("public\n"))
+        );
+        let mut next = String::new();
+        input.read_line(&mut next).unwrap();
+        assert_eq!(next, "next-command\n");
+        assert!(!String::from_utf8(output).unwrap().contains("key  "));
+        assert!(
+            run_record_line(
+                "data-add 1 --private-key-stdin",
+                "unterminated\n",
+                &mut session,
+                true
+            )
+            .is_err()
+        );
+        assert!(
+            run_record_line(
+                "data-add 1 --private-key-stdin --public-key-stdin",
+                "key\n",
+                &mut session,
+                false
+            )
+            .is_err()
+        );
+        assert_eq!(
+            session
+                .ensure_storage(&mut Vec::new(), true)
+                .unwrap()
+                .get_record(RecordId::new(1))
+                .unwrap()
+                .data()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn data_source_flags_are_exclusive_and_totp_options_require_a_totp_secret() {
+        for args in [
+            vec!["--password-stdin", "--private-key-stdin"],
+            vec!["--code-stdin", "--totp-stdin"],
+            vec!["--totp-stdin", "--public-key-stdin"],
+            vec!["--private-key-file", "key", "--private-key-stdin"],
+            vec!["--public-key-file", "key", "--public-key-stdin"],
+            vec!["--digits", "8"],
+            vec!["--algorithm", "sha256"],
+            vec!["--period", "60"],
+        ] {
+            let mut words = vec!["repass", "record", "add", "--name", "test"];
+            words.extend(args);
+            assert!(Cli::try_parse_from(words).is_err());
+        }
+    }
+
+    #[test]
+    fn password_shortcut_rejects_ambiguity_and_empty_records_are_supported() {
+        let directory = TestDirectory::new();
+        let storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let mut session = Session::with_storage(directory.0.clone(), storage);
+        run_record_line("add --name empty", "", &mut session, false).unwrap();
+        run_record_line("update 1 --password-stdin", "first\n", &mut session, false).unwrap();
+        run_record_line(
+            "update 1 --password-stdin",
+            "changed\n",
+            &mut session,
+            false,
+        )
+        .unwrap();
+        run_record_line(
+            "data-add 1 --password-stdin",
+            "second\n",
+            &mut session,
+            false,
+        )
+        .unwrap();
+        assert!(
+            run_record_line(
+                "update 1 --password-stdin",
+                "ambiguous\n",
+                &mut session,
+                false
+            )
+            .is_err()
+        );
+        let view = session
+            .ensure_storage(&mut Vec::new(), false)
+            .unwrap()
+            .get_record(RecordId::new(1))
+            .unwrap();
+        assert!(matches!(&view.data()[0].value, Data::Password(value) if value == "changed"));
+        assert!(matches!(&view.data()[1].value, Data::Password(value) if value == "second"));
     }
 }
