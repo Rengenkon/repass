@@ -47,7 +47,7 @@ pub enum Command {
     /// Manage records and their passwords, SSH keys, TOTP data and codes
     ///
     /// Use list or find to obtain record IDs. Use show to inspect the data IDs
-    /// within a record, then data-add, data-update or data-delete to edit its
+    /// within a record, then update to edit its
     /// contents. Storage commands request a master password and create a vault
     /// on first use if none exists.
     Record {
@@ -299,11 +299,11 @@ pub enum RecordCommand {
     /// one data type using its input options. SSH may include a private key, a
     /// public key, or both; every supplied key field must be nonblank.
     #[command(
-        after_long_help = "Examples:\n  repass record add --name mail --password-stdin\n  repass record add --name server --host example.test --private-key-file id_ed25519 --public-key-file id_ed25519.pub\n  repass record add --name notes --notes 'Account details'"
+        after_long_help = "Examples:\n  repass record create mail --password-stdin\n  repass record create server --host example.test --private-key-file id_ed25519 --public-key-file id_ed25519.pub\n  repass record create notes --notes 'Account details'"
     )]
-    Add {
+    Create {
         /// Nonempty display name for the record
-        #[arg(long, help_heading = "Record fields")]
+        #[arg(help_heading = "Record fields")]
         name: String,
         #[command(flatten)]
         data: DataInput,
@@ -367,10 +367,17 @@ pub enum RecordCommand {
         #[arg(long)]
         reveal: bool,
     },
-    /// Change only the specified record fields or tag associations
+    /// Change record fields, tags and data elements in one operation
     ///
-    /// Omitted fields are retained. Use --clear-* to remove optional fields.
-    /// Use data-add/data-update/data-delete to edit individual data elements.
+    /// Omitted fields are retained. Use --remove-* to remove optional fields.
+    /// A data source adds an element unless --replace-data selects an existing
+    /// element. Replacement retains its ID and replaces the entire value;
+    /// supply both SSH parts again to retain both. Use --remove-data to remove
+    /// elements. All changes are validated together before saving.
+    #[command(
+        group(clap::ArgGroup::new("data_source").args(["password_stdin", "code_stdin", "totp_stdin", "private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"]).multiple(true)),
+        after_long_help = "Examples:\n  repass record update 1 --host example.test --add-tag 2\n  repass record update 1 --password-stdin\n  repass record update 1 --replace-data 2 --private-key-file id_ed25519 --public-key-file id_ed25519.pub\n  repass record update 1 --remove-data 3 --remove-tag 2"
+    )]
     Update {
         /// Record ID from record list or record find
         record_id: String,
@@ -388,20 +395,21 @@ pub enum RecordCommand {
         notes: Option<String>,
         /// Remove the username
         #[arg(long, conflicts_with = "username")]
-        clear_username: bool,
+        remove_username: bool,
         /// Remove the host
         #[arg(long, conflicts_with = "host")]
-        clear_host: bool,
+        remove_host: bool,
         /// Remove the notes
         #[arg(long, conflicts_with = "notes")]
-        clear_notes: bool,
-        /// Add or replace the record's only password from a stdin line
-        ///
-        /// Adds a password if none exists, or replaces the only password.
-        /// With multiple passwords, use data-update with a data ID instead.
-        /// One-shot mode reads one stdin line; sessions use hidden input.
-        #[arg(long)]
-        password_stdin: bool,
+        remove_notes: bool,
+        #[command(flatten)]
+        data: DataInput,
+        /// Replace this entire data element using the supplied data source
+        #[arg(long, requires = "data_source")]
+        replace_data: Option<DataId>,
+        /// Remove data element IDs (see record show)
+        #[arg(long, num_args = 1..)]
+        remove_data: Vec<DataId>,
         /// Attach existing tag IDs (see tag list)
         #[arg(long, num_args = 1..)]
         add_tag: Vec<TagId>,
@@ -409,50 +417,10 @@ pub enum RecordCommand {
         #[arg(long, num_args = 1..)]
         remove_tag: Vec<TagId>,
     },
-    /// Delete a record and all of its data elements
-    Delete {
+    /// Remove a record and all of its data elements
+    Remove {
         /// Record ID from record list or record find
         record_id: String,
-    },
-    /// Add one password, SSH, TOTP or code element to a record
-    ///
-    /// Select one data type using its input options; an input source is required.
-    /// SSH may include a private key, a public key, or both. Each element gets
-    /// an ID within its record; multiple elements of the same type are allowed.
-    #[command(
-        after_long_help = "Examples:\n  repass record data-add 1 --totp-stdin --algorithm sha256 --digits 8\n  repass record data-add 1 --code-stdin",
-        after_help = "Select one data type using its input options; an input source is required."
-    )]
-    DataAdd {
-        /// Record ID from record list or record find
-        record_id: String,
-        #[command(flatten)]
-        data: DataInput,
-    },
-    /// Replace an entire data element, retaining its ID
-    ///
-    /// Select one data type using its input options; an input source is required.
-    /// This is full replacement, not a partial field update. To retain both
-    /// parts of an SSH pair, supply both again. Supplying only the public key
-    /// removes the private part. The data type may also be changed.
-    #[command(
-        after_long_help = "Example:\n  repass record data-update 1 2 --private-key-file id_ed25519 --public-key-file id_ed25519.pub",
-        after_help = "Select one data type using its input options; an input source is required."
-    )]
-    DataUpdate {
-        /// Record ID from record list or record find
-        record_id: String,
-        /// Data element ID within this record (see record show)
-        data_id: DataId,
-        #[command(flatten)]
-        data: DataInput,
-    },
-    /// Delete one data element; its ID will not be reused
-    DataDelete {
-        /// Record ID from record list or record find
-        record_id: String,
-        /// Data element ID within this record (see record show)
-        data_id: DataId,
     },
 }
 
@@ -529,15 +497,14 @@ pub struct DataInput {
 #[derive(Subcommand)]
 pub enum TagCommand {
     /// Create a tag with a unique, nonempty name
-    Add {
+    Create {
         /// Unique, nonempty tag name
-        #[arg(long)]
         name: String,
     },
     /// List tag IDs and names, including technical names for missing entries
     List,
-    /// Delete a tag that is not used by any record
-    Delete {
+    /// Remove a tag that is not used by any record
+    Remove {
         /// Tag ID from tag list
         tag_id: TagId,
     },
@@ -751,7 +718,7 @@ mod tests {
         execute(
             Command::Record {
                 data_dir: None,
-                command: RecordCommand::Add {
+                command: RecordCommand::Create {
                     name: "mail".into(),
                     data: DataInput {
                         password_stdin: true,
@@ -906,10 +873,12 @@ mod tests {
                     username: None,
                     host: None,
                     notes: None,
-                    clear_username: true,
-                    clear_host: true,
-                    clear_notes: true,
-                    password_stdin: false,
+                    remove_username: true,
+                    remove_host: true,
+                    remove_notes: true,
+                    data: DataInput::default(),
+                    replace_data: None,
+                    remove_data: Vec::new(),
                     add_tag: Vec::new(),
                     remove_tag: Vec::new(),
                 },
@@ -943,7 +912,7 @@ mod tests {
         execute(
             Command::Record {
                 data_dir: None,
-                command: RecordCommand::Add {
+                command: RecordCommand::Create {
                     name: "mail".into(),
                     data: DataInput {
                         password_stdin: true,
@@ -1146,7 +1115,7 @@ mod tests {
         let mut session = Session::with_storage(directory.0.clone(), storage);
         let private = "-----BEGIN OPENSSH PRIVATE KEY-----\r\nprivate-secret  \r\n-----END OPENSSH PRIVATE KEY-----\r\n";
         let add = format!(
-            "add --name ssh --host Example.TEST. --private-key-stdin --public-key-file '{}'",
+            "create ssh --host Example.TEST. --private-key-stdin --public-key-file '{}'",
             public_path.display()
         );
         run_record_line(&add, private, &mut session, false).unwrap();
@@ -1159,21 +1128,21 @@ mod tests {
             );
         }
         run_record_line(
-            "data-add 1 --totp-stdin --algorithm sha256 --digits 8 --period 60",
+            "update 1 --totp-stdin --algorithm sha256 --digits 8 --period 60",
             "MZXW6YTB\n",
             &mut session,
             false,
         )
         .unwrap();
         run_record_line(
-            "data-add 1 --code-stdin",
+            "update 1 --code-stdin",
             "recovery-secret\n",
             &mut session,
             false,
         )
         .unwrap();
         run_record_line(
-            "data-add 1 --password-stdin",
+            "update 1 --password-stdin",
             "password-secret\n",
             &mut session,
             false,
@@ -1204,26 +1173,32 @@ mod tests {
         }
         // Replacement can retain just the public part of an SSH value.
         run_record_line(
-            "data-update 1 1 --public-key-stdin",
+            "update 1 --replace-data 1 --public-key-stdin",
             "new-public\n",
             &mut session,
             false,
         )
         .unwrap();
-        run_record_line("data-delete 1 3", "", &mut session, false).unwrap();
-        run_record_line("data-add 1 --code-stdin", "new-code\n", &mut session, false).unwrap();
+        run_record_line("update 1 --remove-data 3", "", &mut session, false).unwrap();
+        run_record_line("update 1 --code-stdin", "new-code\n", &mut session, false).unwrap();
         assert!(
             run_record_line("list", "", &mut session, false)
                 .unwrap()
                 .contains("1:ssh, 2:totp, 4:password, 5:code")
         );
-        assert!(run_record_line("data-add 1", "", &mut session, false).is_err());
+        assert!(run_record_line("update 1 --replace-data 1", "", &mut session, false).is_err());
         assert!(
-            run_record_line("data-update 1 99 --code-stdin", "x\n", &mut session, false).is_err()
+            run_record_line(
+                "update 1 --replace-data 99 --code-stdin",
+                "x\n",
+                &mut session,
+                false
+            )
+            .is_err()
         );
         assert!(
             run_record_line(
-                "data-add 1 --totp-stdin",
+                "update 1 --totp-stdin",
                 "invalid-secret\n",
                 &mut session,
                 false
@@ -1249,8 +1224,7 @@ mod tests {
         let command = Cli::try_parse_from([
             "repass",
             "record",
-            "add",
-            "--name",
+            "create",
             "ssh",
             "--private-key-stdin",
             "--public-key-stdin",
@@ -1271,7 +1245,7 @@ mod tests {
         assert!(!String::from_utf8(output).unwrap().contains("key  "));
         assert!(
             run_record_line(
-                "data-add 1 --private-key-stdin",
+                "update 1 --private-key-stdin",
                 "unterminated\n",
                 &mut session,
                 true
@@ -1280,7 +1254,7 @@ mod tests {
         );
         assert!(
             run_record_line(
-                "data-add 1 --private-key-stdin --public-key-stdin",
+                "update 1 --private-key-stdin --public-key-stdin",
                 "key\n",
                 &mut session,
                 false
@@ -1311,42 +1285,129 @@ mod tests {
             vec!["--algorithm", "sha256"],
             vec!["--period", "60"],
         ] {
-            let mut words = vec!["repass", "record", "add", "--name", "test"];
+            let mut words = vec!["repass", "record", "create", "test"];
             words.extend(args);
             assert!(Cli::try_parse_from(words).is_err());
         }
     }
 
     #[test]
-    fn password_shortcut_rejects_ambiguity_and_empty_records_are_supported() {
+    fn single_required_values_are_positional_and_old_commands_are_rejected() {
+        for words in [
+            vec!["record", "create", "My mail"],
+            vec!["tag", "create", "work"],
+            vec!["record", "show", "1"],
+            vec!["record", "update", "1"],
+            vec!["record", "remove", "1"],
+            vec!["tag", "remove", "2"],
+            vec!["completions", "bash"],
+        ] {
+            let mut arguments = vec!["repass"];
+            arguments.extend(words.clone());
+            assert!(Cli::try_parse_from(arguments).is_ok(), "{words:?}");
+            let mut missing = vec!["repass"];
+            missing.extend(&words[..words.len() - 1]);
+            assert!(Cli::try_parse_from(missing).is_err(), "{words:?}");
+        }
+        for line in [
+            "record add --name mail",
+            "record create --name mail",
+            "tag add --name work",
+            "tag create --name work",
+            "record delete 1",
+            "tag delete 1",
+            "record data-add 1 --password-stdin",
+            "record data-update 1 1 --password-stdin",
+            "record data-delete 1 1",
+            "record update 1 --clear-host",
+            "record update 1 --replace-data 1",
+        ] {
+            let mut arguments = vec!["repass".to_owned()];
+            arguments.extend(shlex::split(line).unwrap());
+            assert!(Cli::try_parse_from(arguments).is_err(), "{line}");
+        }
+    }
+
+    #[test]
+    fn unified_update_changes_fields_tags_and_data_and_rolls_back_invalid_changes() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let old_tag = storage.create_tag("old").unwrap();
+        let new_tag = storage.create_tag("work").unwrap();
+        let mut session = Session::with_storage(directory.0.clone(), storage);
+        run_record_line(
+            &format!("create mail --tag {old_tag} --password-stdin"),
+            "first\n",
+            &mut session,
+            false,
+        )
+        .unwrap();
+        run_record_line("update 1 --code-stdin", "code\n", &mut session, false).unwrap();
+        run_record_line("update 1 --code-stdin", "another\n", &mut session, false).unwrap();
+        run_record_line(
+            &format!("update 1 --name renamed --username alice --host example.test --notes note --add-tag {new_tag} --remove-tag {old_tag} --replace-data 1 --password-stdin --remove-data 2 3"),
+            "replacement\n", &mut session, false,
+        ).unwrap();
+        let before = run_record_line("show 1 --reveal", "", &mut session, false).unwrap();
+        let disk_before = fs::read(directory.0.join("records.repass")).unwrap();
+        for line in [
+            "update 1 --name broken --add-tag 999 --password-stdin",
+            "update 1 --name broken --remove-data 999 --password-stdin",
+            "update 1 --name broken --replace-data 1 --remove-data 1 --password-stdin",
+            "update 1 --name broken --remove-data 1 1",
+            "update 1 --name broken --code-stdin",
+        ] {
+            // The blank code also tests data validation before metadata changes.
+            let input = if line.ends_with("--code-stdin") {
+                " \n"
+            } else {
+                "new\n"
+            };
+            assert!(
+                run_record_line(line, input, &mut session, false).is_err(),
+                "{line}"
+            );
+            assert_eq!(
+                run_record_line("show 1 --reveal", "", &mut session, false).unwrap(),
+                before
+            );
+            assert_eq!(
+                fs::read(directory.0.join("records.repass")).unwrap(),
+                disk_before
+            );
+        }
+        run_record_line("update 1 --password-stdin", "added\n", &mut session, false).unwrap();
+        session.close();
+        let storage = Storage::open_in(&directory.0, b"master").unwrap();
+        let view = storage.get_record(RecordId::new(1)).unwrap();
+        assert_eq!(view.name, "renamed");
+        assert_eq!(view.username, Some("alice"));
+        assert_eq!(view.host.unwrap().to_string(), "example.test");
+        assert_eq!(view.notes, Some("note"));
+        assert_eq!(view.tags, &[new_tag]);
+        assert_eq!(view.data().len(), 2);
+        assert_eq!(view.data()[0].id, DataId::new(1));
+        assert!(matches!(&view.data()[0].value, Data::Password(value) if value == "replacement"));
+        assert_eq!(view.data()[1].id, DataId::new(4));
+        assert!(matches!(&view.data()[1].value, Data::Password(value) if value == "added"));
+    }
+
+    #[test]
+    fn update_adds_passwords_and_replacement_requires_an_explicit_id() {
         let directory = TestDirectory::new();
         let storage = Storage::create_in(&directory.0, b"master").unwrap();
         let mut session = Session::with_storage(directory.0.clone(), storage);
-        run_record_line("add --name empty", "", &mut session, false).unwrap();
+        run_record_line("create empty", "", &mut session, false).unwrap();
         run_record_line("update 1 --password-stdin", "first\n", &mut session, false).unwrap();
         run_record_line(
-            "update 1 --password-stdin",
+            "update 1 --replace-data 1 --password-stdin",
             "changed\n",
             &mut session,
             false,
         )
         .unwrap();
-        run_record_line(
-            "data-add 1 --password-stdin",
-            "second\n",
-            &mut session,
-            false,
-        )
-        .unwrap();
-        assert!(
-            run_record_line(
-                "update 1 --password-stdin",
-                "ambiguous\n",
-                &mut session,
-                false
-            )
-            .is_err()
-        );
+        run_record_line("update 1 --password-stdin", "second\n", &mut session, false).unwrap();
+        run_record_line("update 1 --password-stdin", "third\n", &mut session, false).unwrap();
         let view = session
             .ensure_storage(&mut Vec::new(), false)
             .unwrap()
@@ -1354,5 +1415,6 @@ mod tests {
             .unwrap();
         assert!(matches!(&view.data()[0].value, Data::Password(value) if value == "changed"));
         assert!(matches!(&view.data()[1].value, Data::Password(value) if value == "second"));
+        assert!(matches!(&view.data()[2].value, Data::Password(value) if value == "third"));
     }
 }

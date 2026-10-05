@@ -29,18 +29,15 @@ repass vault [--data-dir <DIR>] info
 repass vault [--data-dir <DIR>] change-password
 repass vault [--data-dir <DIR>] recover
 repass vault [--data-dir <DIR>] finish-init
-repass record [--data-dir <DIR>] add --name <NAME> [<DATA_SOURCE>] [--username <TEXT>] [--host <HOST>] [--notes <TEXT>] [--tag <TAG_ID>...]
+repass record [--data-dir <DIR>] create <NAME> [<DATA_SOURCE>] [--username <TEXT>] [--host <HOST>] [--notes <TEXT>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] list [--name <NAME>] [--host <HOST>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] find [--query <TEXT>] [--name <NAME>] [--host <HOST>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] show <RECORD_ID> [--reveal]
-repass record [--data-dir <DIR>] update <RECORD_ID> [--name <NAME>] [--username <TEXT> | --clear-username] [--host <HOST> | --clear-host] [--notes <TEXT> | --clear-notes] [--password-stdin] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
-repass record [--data-dir <DIR>] delete <RECORD_ID>
-repass record [--data-dir <DIR>] data-add <RECORD_ID> <DATA_SOURCE>
-repass record [--data-dir <DIR>] data-update <RECORD_ID> <DATA_ID> <DATA_SOURCE>
-repass record [--data-dir <DIR>] data-delete <RECORD_ID> <DATA_ID>
-repass tag [--data-dir <DIR>] add --name <NAME>
+repass record [--data-dir <DIR>] update <RECORD_ID> [--name <NAME>] [--username <TEXT> | --remove-username] [--host <HOST> | --remove-host] [--notes <TEXT> | --remove-notes] [<DATA_SOURCE>] [--replace-data <DATA_ID>] [--remove-data <DATA_ID>...] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
+repass record [--data-dir <DIR>] remove <RECORD_ID>
+repass tag [--data-dir <DIR>] create <NAME>
 repass tag [--data-dir <DIR>] list
-repass tag [--data-dir <DIR>] delete <TAG_ID>
+repass tag [--data-dir <DIR>] remove <TAG_ID>
 repass tag [--data-dir <DIR>] rename <TAG_ID> --name <NAME>
 repass tag [--data-dir <DIR>] recover
 repass interactive [--data-dir <DIR>] [--warnings | --no-warnings]
@@ -61,7 +58,7 @@ are prompted. The master password, passwords, codes and TOTP secrets are request
 terminal input. In a one-shot invocation, `--password-stdin` reads one record
 password line from stdin (removing its line ending).
 Optional arguments are not prompted. Use `h` or `help` for help (including
-`h generate` and `help record add`), and `q`, `quit`, or EOF to leave.
+`h generate` and `help record create`), and `q`, `quit`, or EOF to leave.
 `exit` is not a supported command.
 The `interactive` command is unavailable and absent from help inside a session.
 Use `-h` for a compact summary and `--help` for full descriptions and examples.
@@ -106,11 +103,33 @@ interactive session, each requested key field uses ordinary multiline terminal
 input, terminated by a line containing only `.`. The terminator is not stored,
 and EOF before it cancels the operation.
 
-`data-update` replaces the entire element while retaining its ID. To replace an
-SSH pair and keep both parts, provide both parts again; to retain only the public
-part, provide only that part. `data-delete` removes the entire element. The
-`update --password-stdin` shortcut adds a password if none exists, or replaces
-the only password. With multiple passwords, use `data-update` and its data ID.
+`record update` modifies fields, tags and data together. A data source without
+`--replace-data` always adds a new element, even if passwords already exist.
+`--replace-data <DATA_ID>` requires a data source and replaces the entire element
+while retaining its ID. To replace an SSH pair and keep both parts, provide both
+parts again; to retain only the public part, provide only that part.
+`--remove-data <DATA_ID>...` removes elements; the same ID cannot be replaced and
+removed in one operation. Omitted fields are retained; `--remove-username`,
+`--remove-host` and `--remove-notes` clear optional fields. All changes are
+validated before a single record update is saved.
+
+Create a tag, obtain its ID from `tag list`, and attach it to a record:
+
+```text
+repass tag create work
+repass tag list
+repass record update 1 --add-tag 2
+repass record update 1 --remove-tag 2
+```
+
+IDs in examples are illustrative; use the IDs returned by your own vault.
+Tags can also be attached at creation with `record create mail --tag 2`.
+`tag remove` rejects tags still referenced by records.
+
+Commands with one required value take it positionally: `record create <NAME>`,
+`tag create <NAME>`, `record show/update/remove <RECORD_ID>`,
+`tag remove <TAG_ID>`, `vault switch <DIR>` (session only), and
+`completions <SHELL>`. Quote names containing spaces.
 
 `--host` replaces the former `--url`: it accepts an IP address or domain without
 protocol, port or path. Host filters combine with exact names and tag
@@ -143,12 +162,13 @@ uses exact filters and orders results by ID. Secret values are not searched.
 Examples (master-password input is handled separately by the CLI):
 
 ```text
-repass record add --name server --host example.test --private-key-file id_ed25519 --public-key-file id_ed25519.pub
-repass record data-add 1 --totp-stdin --algorithm sha256 --digits 8
-repass record data-add 1 --code-stdin
+repass record create server --host example.test --private-key-file id_ed25519 --public-key-file id_ed25519.pub
+repass record update 1 --totp-stdin --algorithm sha256 --digits 8
+repass record update 1 --code-stdin
+repass record update 1 --replace-data 1 --private-key-file new_key --public-key-file new_key.pub
 repass record find --host EXAMPLE.TEST.
 repass record show 1 --reveal
-repass record data-delete 1 2
+repass record update 1 --remove-data 2
 ```
 
 ## Colors

@@ -59,7 +59,6 @@ const SESSION_INPUT_HELP: &str =
     "Missing required arguments are prompted; optional arguments are not.";
 
 fn session_help(mut command: clap::Command) -> clap::Command {
-    let updating_record = command.get_name() == "update";
     let short_footer = match command.get_after_help() {
         Some(footer) => format!("{footer}\n\n{SESSION_INPUT_HELP}"),
         None => SESSION_INPUT_HELP.to_owned(),
@@ -77,9 +76,6 @@ fn session_help(mut command: clap::Command) -> clap::Command {
         .mut_args(|arg| {
             match arg.get_id().as_str() {
                 "data_dir" => arg.hide(true),
-                "password_stdin" if updating_record => arg
-                    .help("Add or replace the record's only password using hidden input")
-                    .long_help("Adds a password if none exists, or replaces the only password, using hidden input. With multiple passwords, use data-update with a data ID instead."),
                 "password_stdin" => arg
                     .help("Enter one password using hidden input")
                     .long_help("Requests the password using hidden terminal input. The master password is requested separately when opening the vault."),
@@ -291,8 +287,8 @@ mod tests {
         for suffix in [
             "",
             " generate",
-            " record add",
-            " record data-update",
+            " record create",
+            " record update",
             " vault switch",
             " completions",
         ] {
@@ -319,15 +315,15 @@ mod tests {
             if suffix.is_empty() {
                 assert!(!help.to_string().contains("interactive"));
             }
-            if suffix == " record data-update" {
+            if suffix == " record update" {
                 let text = help.to_string();
-                assert!(text.contains("<RECORD_ID> <DATA_ID>"));
+                assert!(text.contains("<RECORD_ID>"));
                 assert!(!text.contains("[RECORD_ID]"));
                 assert!(text.contains(SESSION_INPUT_HELP));
                 assert!(text.contains("line containing only '.'"));
                 assert!(!text.contains("stdin until EOF"));
-                assert!(text.contains("data-update 1 2 --private-key-file"));
-                assert!(!text.contains("repass record data-update 1 2"));
+                assert!(text.contains("update 1 --replace-data 2 --private-key-file"));
+                assert!(!text.contains("repass record update 1"));
             }
         }
         for words in [
@@ -345,7 +341,7 @@ mod tests {
         for flag in ["-h", "--help"] {
             let mut output = Vec::new();
             let error = parse(
-                vec!["record".into(), "data-update".into(), flag.into()],
+                vec!["record".into(), "update".into(), flag.into()],
                 &mut Cursor::new(""),
                 &mut output,
             )
@@ -355,7 +351,7 @@ mod tests {
             .unwrap();
             assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
             let text = error.to_string();
-            assert!(text.contains("<RECORD_ID> <DATA_ID>"));
+            assert!(text.contains("<RECORD_ID>"));
             assert!(!text.contains("--data-dir"));
             assert!(text.contains(SESSION_INPUT_HELP));
             assert!(output.is_empty());
@@ -426,7 +422,7 @@ mod tests {
             .is_err()
         );
         let command = parse(
-            vec!["tag".into(), "delete".into()],
+            vec!["tag".into(), "remove".into()],
             &mut Cursor::new("42\n"),
             &mut Vec::new(),
         )
@@ -434,7 +430,7 @@ mod tests {
         assert!(matches!(
             command,
             Command::Tag {
-                command: commands::TagCommand::Delete { tag_id },
+                command: commands::TagCommand::Remove { tag_id },
                 ..
             } if tag_id == 42.into()
         ));
@@ -442,18 +438,18 @@ mod tests {
 
     #[test]
     fn existing_arguments_and_quoted_values_do_not_prompt() {
-        let words = shlex::split("record add --name 'My mail' --password-stdin").unwrap();
+        let words = shlex::split("record create 'My mail' --password-stdin").unwrap();
         let mut output = Vec::new();
         assert!(parse(words, &mut Cursor::new(""), &mut output).is_ok());
         assert!(output.is_empty());
         let command = parse(
-            shlex::split("record add").unwrap(),
+            shlex::split("record create").unwrap(),
             &mut Cursor::new("My mail\n"),
             &mut Vec::new(),
         )
         .unwrap();
         assert!(
-            matches!(command, Command::Record { command: commands::RecordCommand::Add { name, data, .. }, .. } if name == "My mail" && !data.password_stdin)
+            matches!(command, Command::Record { command: commands::RecordCommand::Create { name, data, .. }, .. } if name == "My mail" && !data.password_stdin)
         );
     }
 

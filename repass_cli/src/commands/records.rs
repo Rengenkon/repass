@@ -14,7 +14,7 @@ pub(super) fn execute_record(
     interactive: bool,
 ) -> Result<()> {
     match command {
-        RecordCommand::Add {
+        RecordCommand::Create {
             name,
             data,
             username,
@@ -152,53 +152,41 @@ pub(super) fn execute_record(
             username,
             host,
             notes,
-            clear_username,
-            clear_host,
-            clear_notes,
-            password_stdin,
+            remove_username,
+            remove_host,
+            remove_notes,
+            data,
+            replace_data,
+            remove_data,
             add_tag,
             remove_tag,
         } => {
             let id = parse_record_id(&record_id)?;
-            if password_stdin {
-                session.ensure_storage(output, interactive)?;
+            if replace_data.is_some_and(|data_id| remove_data.contains(&data_id)) {
+                return Err("cannot replace and remove the same data element".into());
             }
-            let password = if password_stdin {
-                Some(read_record_password(session, input, output, interactive)?)
-            } else {
-                None
-            };
-            let storage = session.ensure_storage(output, interactive)?;
+            session
+                .ensure_storage(output, interactive)?
+                .get_record(id)?;
+            let value = read_data(data, session, input, output, interactive)?;
             let mut add_data = Vec::new();
-            let mut replace_data = Vec::new();
-            if let Some(password) = password {
-                let passwords = storage
-                    .get_record(id)?
-                    .data()
-                    .iter()
-                    .filter(|entry| matches!(entry.value, Data::Password(_)))
-                    .map(|entry| entry.id)
-                    .collect::<Vec<_>>();
-                match passwords.as_slice() {
-                    [] => add_data.push(Data::Password(password)),
-                    [data_id] => replace_data.push((*data_id, Data::Password(password))),
-                    _ => {
-                        return Err(
-                            "record has multiple passwords; use data-update with a data ID".into(),
-                        );
-                    }
-                }
+            let mut replacements = Vec::new();
+            match (replace_data, value) {
+                (Some(data_id), Some(value)) => replacements.push((data_id, value)),
+                (Some(_), None) => return Err("--replace-data requires a data source".into()),
+                (None, Some(value)) => add_data.push(value),
+                (None, None) => {}
             }
-            let changed = storage.update_record(
+            let changed = session.ensure_storage(output, interactive)?.update_record(
                 id,
                 RecordPatch {
                     name,
                     add_data,
-                    replace_data,
-                    remove_data: Vec::new(),
-                    username: optional_field(username, clear_username),
-                    host: optional_field(host, clear_host),
-                    notes: optional_field(notes, clear_notes),
+                    replace_data: replacements,
+                    remove_data,
+                    username: optional_field(username, remove_username),
+                    host: optional_field(host, remove_host),
+                    notes: optional_field(notes, remove_notes),
                     add_tags: add_tag,
                     remove_tags: remove_tag,
                 },
@@ -210,72 +198,12 @@ pub(super) fn execute_record(
                 Ok(())
             }
         }
-        RecordCommand::Delete { record_id } => {
+        RecordCommand::Remove { record_id } => {
             let id = parse_record_id(&record_id)?;
             session
                 .ensure_storage(output, interactive)?
                 .delete_record(id)?;
-            success(output, format_args!("Record {id} deleted"))
-        }
-        RecordCommand::DataAdd { record_id, data } => {
-            let id = parse_record_id(&record_id)?;
-            session
-                .ensure_storage(output, interactive)?
-                .get_record(id)?;
-            let value = read_data(data, session, input, output, interactive)?
-                .ok_or("select a data source")?;
-            let storage = session.ensure_storage(output, interactive)?;
-            storage.update_record(
-                id,
-                RecordPatch {
-                    add_data: vec![value],
-                    ..RecordPatch::default()
-                },
-            )?;
-            let data_id = storage
-                .get_record(id)?
-                .data()
-                .last()
-                .ok_or("data was not added")?
-                .id;
-            success(output, format_args!("Data {data_id} added to record {id}"))
-        }
-        RecordCommand::DataUpdate {
-            record_id,
-            data_id,
-            data,
-        } => {
-            let id = parse_record_id(&record_id)?;
-            session
-                .ensure_storage(output, interactive)?
-                .get_record(id)?;
-            let value = read_data(data, session, input, output, interactive)?
-                .ok_or("select a data source")?;
-            session.ensure_storage(output, interactive)?.update_record(
-                id,
-                RecordPatch {
-                    replace_data: vec![(data_id, value)],
-                    ..RecordPatch::default()
-                },
-            )?;
-            success(
-                output,
-                format_args!("Data {data_id} updated in record {id}"),
-            )
-        }
-        RecordCommand::DataDelete { record_id, data_id } => {
-            let id = parse_record_id(&record_id)?;
-            session.ensure_storage(output, interactive)?.update_record(
-                id,
-                RecordPatch {
-                    remove_data: vec![data_id],
-                    ..RecordPatch::default()
-                },
-            )?;
-            success(
-                output,
-                format_args!("Data {data_id} deleted from record {id}"),
-            )
+            success(output, format_args!("Record {id} removed"))
         }
     }
 }
@@ -457,7 +385,7 @@ pub(super) fn execute_tag(
     interactive: bool,
 ) -> Result<()> {
     match command {
-        TagCommand::Add { name } => {
+        TagCommand::Create { name } => {
             let id = session
                 .ensure_storage(output, interactive)?
                 .create_tag(name)?;
@@ -474,11 +402,11 @@ pub(super) fn execute_tag(
             }
             Ok(())
         }
-        TagCommand::Delete { tag_id } => {
+        TagCommand::Remove { tag_id } => {
             session
                 .ensure_storage(output, interactive)?
                 .delete_tag(tag_id)?;
-            success(output, format_args!("Tag {tag_id} deleted"))
+            success(output, format_args!("Tag {tag_id} removed"))
         }
         TagCommand::Rename { tag_id, name } => {
             session

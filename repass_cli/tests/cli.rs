@@ -144,7 +144,7 @@ fn one_shot_missing_arguments_and_interactive_only_switch_are_errors() {
         vec!["generate", "--length", "13"],
         vec!["generate", "--separator-kind", "none"],
         vec!["generate", "--length", "0"],
-        vec!["record", "add"],
+        vec!["record", "create"],
         vec!["vault", "switch", "other"],
     ] {
         let output = cli().args(arguments).stdin(Stdio::null()).output().unwrap();
@@ -157,7 +157,7 @@ fn one_shot_missing_arguments_and_interactive_only_switch_are_errors() {
 #[test]
 fn update_clear_flags_conflict_with_setting_the_same_optional_field() {
     for field in ["username", "host", "notes"] {
-        let clear_flag = format!("--clear-{field}");
+        let clear_flag = format!("--remove-{field}");
         let set_flag = format!("--{field}");
         let output = cli()
             .args(["record", "update", "1"])

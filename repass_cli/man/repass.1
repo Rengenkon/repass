@@ -139,7 +139,7 @@ Limits: 1,000,000 scalars per password, 100,000 passwords per batch and
 16,000,000 collected batch scalars, calculated using the maximum target length.
 .SH RECORD COMMANDS
 .TP
-.B record add \-\-name NAME [options]
+.B record create NAME [options]
 Create a record with a nonempty name. Optional metadata:
 .BR "\-\-username TEXT" ,
 .BR "\-\-host HOST" ,
@@ -172,28 +172,29 @@ Change only supplied fields. Accept
 and
 .BR "\-\-remove-tag TAG_ID..." .
 Remove optional fields with
-.BR \-\-clear-username ,
-.BR \-\-clear-host ,
+.BR \-\-remove-username ,
+.BR \-\-remove-host ,
 or
-.BR \-\-clear-notes .
-Each clear flag conflicts with setting that field.
-.B \-\-password-stdin
-adds a password if none exists, or replaces the only password.
-If several passwords exist, select one using data-update instead.
+.BR \-\-remove-notes .
+Each field-removal flag conflicts with setting that field.
+A data source without \-\-replace-data always adds a new element, including
+when passwords already exist. Fields, tags and data can be changed together;
+all changes are validated before saving one record update.
 .TP
-.B record delete RECORD_ID
-Delete the record and all its data elements.
+.B record remove RECORD_ID
+Remove the record and all its data elements.
 .TP
-.B record data-add RECORD_ID DATA_SOURCE
-Append one typed data element; a source is required.
+.B record update RECORD_ID DATA_SOURCE
+Append one typed data element.
 .TP
-.B record data-update RECORD_ID DATA_ID DATA_SOURCE
+.B record update RECORD_ID \-\-replace-data DATA_ID DATA_SOURCE
 Replace the entire element, retaining its ID. Its type may change.
 For SSH, supply both key parts again to retain both: supplying only a public
 key removes the previous private part.
 .TP
-.B record data-delete RECORD_ID DATA_ID
-Delete an element; its ID will not be reused.
+.B record update RECORD_ID \-\-remove-data DATA_ID...
+Remove elements; their IDs will not be reused. The same element cannot be
+replaced and removed in one operation.
 .SS Exact and fuzzy filters
 Both list and find accept
 .BR "\-\-name NAME" ,
@@ -241,7 +242,7 @@ and line endings are preserved, and cryptographic key structure is not parsed.
 In one-shot mode only one part can use stdin; use a file for the other part.
 .SH TAG COMMANDS
 .TP
-.B tag add \-\-name NAME
+.B tag create NAME
 Create a tag with a unique, nonempty name.
 .TP
 .B tag list
@@ -250,8 +251,8 @@ List tag IDs and names, including technical names for missing catalog entries.
 .B tag rename TAG_ID \-\-name NAME
 Set a unique, nonempty name without changing the tag ID.
 .TP
-.B tag delete TAG_ID
-Delete an unused tag. Tags referenced by records cannot be deleted;
+.B tag remove TAG_ID
+Remove an unused tag. Tags referenced by records cannot be removed;
 detach them with record update first.
 .TP
 .B tag recover
@@ -271,7 +272,7 @@ is not stored; EOF before it cancels the operation. Both parts can be
 entered separately in this mode.
 .TP
 .B help [COMMAND...], h [COMMAND...]
-Show help; for example, help record data-update.
+Show help; for example, help record update.
 Required argument markers remain visible even though omitted values are prompted.
 .TP
 .B vault switch DIR
@@ -326,7 +327,7 @@ repass vault \-\-data-dir ~/vault info
 Store an SSH pair from files and find the record:
 .PP
 .nf
-repass record add \-\-name server \-\-username alice \e
+repass record create server \-\-username alice \e
     \-\-host example.test \-\-private-key-file ~/.ssh/id_ed25519 \e
     \-\-public-key-file ~/.ssh/id_ed25519.pub
 repass record find \-\-host EXAMPLE.TEST.
@@ -337,15 +338,16 @@ Read the IDs from list, find, show or tag list before using the examples
 below; the numbers are illustrative:
 .PP
 .nf
-repass tag add \-\-name work
+repass tag create work
 repass tag list
 repass record update 1 \-\-add-tag 2
 repass record find \-\-query alice \-\-host example.test \-\-tag 2
 repass record show 1
 repass record show 1 \-\-reveal
-repass record data-update 1 1 \-\-private-key-file new_key \e
+repass record update 1 \-\-replace-data 1 \-\-private-key-file new_key \e
     \-\-public-key-file new_key.pub
-repass record update 1 \-\-clear-notes \-\-remove-tag 2
+repass record update 1 \-\-remove-notes \-\-remove-tag 2
+repass record update 1 \-\-remove-data 3
 .fi
 .PP
 Enter passwords, TOTP configuration and codes with hidden input in a session.
@@ -353,11 +355,11 @@ After each source command, enter the requested value at its hidden prompt:
 .PP
 .nf
 repass interactive
-record add \-\-name mail \-\-username alice \-\-password-stdin
+record create mail \-\-username alice \-\-password-stdin
 record list
-record data-add 1 \-\-totp-stdin \-\-algorithm sha256 \-\-digits 8
-record data-add 1 \-\-code-stdin
-help record data-update
+record update 1 \-\-totp-stdin \-\-algorithm sha256 \-\-digits 8
+record update 1 \-\-code-stdin
+help record update
 vault switch ~/other-vault
 warnings off
 quit
@@ -367,7 +369,7 @@ One-shot data sources can instead read a redirected file; the master password
 is still entered separately through the terminal:
 .PP
 .nf
-repass record data-add 1 \-\-totp-stdin < totp-secret.txt
+repass record update 1 \-\-totp-stdin < totp-secret.txt
 .fi
 .PP
 Change the master password or explicitly restore a backup:
