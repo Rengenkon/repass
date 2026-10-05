@@ -323,9 +323,9 @@ mod tests {
         assert!(matches!(
             command,
             Command::Tag {
-                command: commands::TagCommand::Delete { tag_id: 42 },
+                command: commands::TagCommand::Delete { tag_id },
                 ..
-            }
+            } if tag_id == 42.into()
         ));
     }
 

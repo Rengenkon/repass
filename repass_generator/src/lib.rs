@@ -19,15 +19,59 @@ mod tests {
     use crate::separator::without_separator::WithoutSeparator;
     use rand::{SeedableRng, rngs::StdRng};
 
+    struct PrefixSeparator;
+
+    impl Separator for PrefixSeparator {
+        fn validate(&self) -> Result<(), crate::error::SeparatorError> {
+            Ok(())
+        }
+
+        fn requirement_for_output(
+            &self,
+            target_chars: usize,
+        ) -> Result<crate::separator::SeparationRequirement, crate::error::SeparatorError> {
+            if target_chars == 0 {
+                return Ok(crate::separator::SeparationRequirement::Impossible { target_chars });
+            }
+            let content_chars = target_chars - 1;
+            Ok(crate::separator::SeparationRequirement::FixedContent {
+                content_chars,
+                part_count: crate::separator::PartCount::Range {
+                    min: 1,
+                    max: content_chars,
+                },
+            })
+        }
+
+        fn separate(&self, parts: &[&str]) -> Result<String, crate::error::SeparatorError> {
+            crate::separator::validate_parts(parts)?;
+            let mut output = String::from("~");
+            for part in parts {
+                output.push_str(part);
+            }
+            Ok(output)
+        }
+
+        fn output_chars(
+            &self,
+            content_chars: usize,
+            _part_count: usize,
+        ) -> Result<usize, crate::error::SeparatorError> {
+            content_chars
+                .checked_add(1)
+                .ok_or(crate::error::SeparatorError::CharacterCountOverflow)
+        }
+    }
+
     #[test]
     fn exact_char_count_works_with_every_separator_strategy() {
         let words = ["a", "bc", "dé", "word", "🦀"];
         let dictionary =
             DictionaryCache::new(FileDictionary::from_entries(words).unwrap()).unwrap();
         let no_separator = WithoutSeparator;
-        let between_parts = BetweenPartsSeparator::new("--");
-        let interval = FixedIntervalSeparator::new("🟠", 3);
-        let fixed_count = FixedCountSeparator::new("::", 2);
+        let between_parts = BetweenPartsSeparator::new("--").unwrap();
+        let interval = FixedIntervalSeparator::new("🟠", 3).unwrap();
+        let fixed_count = FixedCountSeparator::new("::", 2).unwrap();
         let separators: [&dyn Separator; 4] =
             [&no_separator, &between_parts, &interval, &fixed_count];
 
@@ -45,7 +89,7 @@ mod tests {
             FileDictionary::from_entries(["alpha", "β", "🦀", "deux"]).unwrap(),
         )
         .unwrap();
-        let separator = BetweenPartsSeparator::new("·");
+        let separator = BetweenPartsSeparator::new("·").unwrap();
         let query = Query::new(
             PasswordLength::Range {
                 min_chars: 7,
@@ -120,6 +164,18 @@ mod tests {
     }
 
     #[test]
+    fn custom_separator_implementations_work_through_the_public_trait() {
+        let dictionary =
+            DictionaryCache::new(FileDictionary::from_entries(["alpha", "beta"]).unwrap()).unwrap();
+        let separator = PrefixSeparator;
+        let query = Query::new(PasswordLength::Exact(11), &dictionary, &separator).unwrap();
+        let mut rng = StdRng::seed_from_u64(1);
+        let generated = generate_once_with_rng(&query, &mut rng).unwrap();
+        assert!(generated.starts_with('~'));
+        assert_eq!(generated.chars().count(), 11);
+    }
+
+    #[test]
     fn query_rejects_invalid_password_char_counts_empty_dictionaries_and_separators() {
         let dictionary =
             DictionaryCache::new(FileDictionary::from_entries(["entry"]).unwrap()).unwrap();
@@ -166,10 +222,9 @@ mod tests {
             Err(GeneratorError::EmptyDictionaryEntry)
         ));
 
-        let empty_separator = BetweenPartsSeparator::new("");
         assert!(matches!(
-            Query::new(PasswordLength::Exact(5), &dictionary, &empty_separator),
-            Err(GeneratorError::InvalidSeparator(_))
+            BetweenPartsSeparator::new(""),
+            Err(crate::error::SeparatorError::EmptySeparator)
         ));
     }
 

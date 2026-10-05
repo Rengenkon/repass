@@ -177,9 +177,9 @@ mod tests {
             DictionaryCache::new(FileDictionary::from_entries(["a", "é", "xy"]).unwrap()).unwrap();
         let separators: [&dyn Separator; 4] = [
             &WithoutSeparator,
-            &BetweenPartsSeparator::new("--"),
-            &FixedIntervalSeparator::new("🟠", 3),
-            &FixedCountSeparator::new("::", 2),
+            &BetweenPartsSeparator::new("--").unwrap(),
+            &FixedIntervalSeparator::new("🟠", 3).unwrap(),
+            &FixedCountSeparator::new("::", 2).unwrap(),
         ];
         for (index, separator) in separators.into_iter().enumerate() {
             let query = Query::new(PasswordLength::Exact(13), &dictionary, separator).unwrap();

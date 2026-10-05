@@ -1,19 +1,14 @@
 use crate::{Result, output, session::Session};
 use clap::{Args, Parser, Subcommand, ValueEnum, ValueHint};
-use repass_generator::dictionary::{
-    cache::DictionaryCache, file_dictionary::FileDictionary, presets,
-};
-use repass_generator::generator::generate_multi;
-use repass_generator::query::{PasswordLength, Query};
-use repass_generator::separator::{
-    DEFAULT_SEPARATOR, Separator, between_parts::BetweenPartsSeparator,
-    fixed_count::FixedCountSeparator, fixed_interval::FixedIntervalSeparator,
-    without_separator::WithoutSeparator,
-};
-use repass_storage::{FieldUpdate, NewRecord, RecordId, RecordPatch, TagId};
+use repass_storage::{RecordId, TagId};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
+
+mod generation;
+mod records;
+
+pub use generation::generate;
 
 #[derive(Parser)]
 #[command(
@@ -222,6 +217,12 @@ pub enum RecordCommand {
         url: Option<String>,
         #[arg(long)]
         notes: Option<String>,
+        #[arg(long, conflicts_with = "username")]
+        clear_username: bool,
+        #[arg(long, conflicts_with = "url")]
+        clear_url: bool,
+        #[arg(long, conflicts_with = "notes")]
+        clear_notes: bool,
         #[arg(long)]
         password_stdin: bool,
         #[arg(long, num_args = 1..)]
@@ -251,64 +252,6 @@ pub enum TagCommand {
     },
     /// Rebuild a missing or damaged tag-name catalog using technical names
     Recover,
-}
-
-pub fn generate(args: GenerateArgs, default_warnings: bool) -> Result<(Vec<String>, Vec<String>)> {
-    let warnings = if args.warnings_enabled(default_warnings) {
-        ignored_separator_options(&args)
-    } else {
-        Vec::new()
-    };
-    let dictionary = match args.dictionary {
-        Some(path) => DictionaryCache::new(FileDictionary::from_path(path)?)?,
-        None => DictionaryCache::new(presets::all_presets())?,
-    };
-    let text = args.separator.as_deref().unwrap_or(DEFAULT_SEPARATOR);
-    let separator: Box<dyn Separator> = match args.separator_kind {
-        SeparatorKind::None => Box::new(WithoutSeparator),
-        SeparatorKind::BetweenParts => Box::new(BetweenPartsSeparator::new(text)),
-        SeparatorKind::FixedInterval => Box::new(FixedIntervalSeparator::new(
-            text,
-            args.separator_interval.unwrap_or(5),
-        )),
-        SeparatorKind::FixedCount => Box::new(FixedCountSeparator::new(
-            text,
-            args.separator_count.unwrap_or(3),
-        )),
-    };
-    let query = Query::new(PasswordLength::Exact(args.length), &dictionary, &*separator)?;
-    Ok((generate_multi(&query, args.count)?, warnings))
-}
-
-fn ignored_separator_options(args: &GenerateArgs) -> Vec<String> {
-    let mut ignored = Vec::new();
-    if args.separator_kind == SeparatorKind::None && args.separator.is_some() {
-        ignored.push("--separator");
-    }
-    if args.separator_interval.is_some() && args.separator_kind != SeparatorKind::FixedInterval {
-        ignored.push("--separator-interval");
-    }
-    if args.separator_count.is_some() && args.separator_kind != SeparatorKind::FixedCount {
-        ignored.push("--separator-count");
-    }
-    ignored
-        .into_iter()
-        .map(|option| {
-            format!(
-                "{option} is ignored for separator strategy {}",
-                separator_kind_name(args.separator_kind)
-            )
-        })
-        .collect()
-}
-
-fn separator_kind_name(kind: SeparatorKind) -> &'static str {
-    match kind {
-        SeparatorKind::None => "none",
-        SeparatorKind::BetweenParts => "between-parts",
-        SeparatorKind::FixedInterval => "fixed-interval",
-        SeparatorKind::FixedCount => "fixed-count",
-    }
 }
 
 pub fn execute(
@@ -398,213 +341,9 @@ pub fn execute(
             Ok(())
         }
         Command::Record { command, .. } => {
-            execute_record(command, session, input, output, interactive)
+            records::execute_record(command, session, input, output, interactive)
         }
-        Command::Tag { command, .. } => execute_tag(command, session, output, interactive),
-    }
-}
-
-fn execute_record(
-    command: RecordCommand,
-    session: &mut Session,
-    input: &mut impl BufRead,
-    output: &mut impl Write,
-    interactive: bool,
-) -> Result<()> {
-    match command {
-        RecordCommand::Add {
-            name,
-            password_stdin: _,
-            username,
-            url,
-            notes,
-            tag,
-        } => {
-            let storage = session.ensure_storage(output, interactive)?;
-            let password = read_record_password(input, output, interactive)?;
-            let id = storage.create_record(NewRecord {
-                name,
-                password,
-                username,
-                url,
-                notes,
-                tags: tag,
-            })?;
-            success(output, format_args!("Record created with ID {id}"))
-        }
-        RecordCommand::List { tag } => {
-            let storage = session.ensure_storage(output, interactive)?;
-            let tags = storage.list_tags();
-            let records = storage.list_records(tag)?;
-            for record in records {
-                let tag_names = record
-                    .tags
-                    .iter()
-                    .map(|id| {
-                        tags.iter()
-                            .find(|tag| tag.id() == *id)
-                            .map(|tag| {
-                                if tag.is_technical() {
-                                    format!("{}:{} (technical)", id, tag.name())
-                                } else {
-                                    format!("{}:{}", id, tag.name())
-                                }
-                            })
-                            .unwrap_or_else(|| format!("{id}:#tag-{id} (technical)"))
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                writeln!(
-                    output,
-                    "{}\t{}\t{}\t{}",
-                    record.id,
-                    record.name,
-                    record.username.unwrap_or(""),
-                    tag_names
-                )?;
-            }
-            Ok(())
-        }
-        RecordCommand::Show { record_id, reveal } => {
-            let id = parse_record_id(&record_id)?;
-            let storage = session.ensure_storage(output, interactive)?;
-            let tags = storage.list_tags();
-            let record = storage.get_record(id)?;
-            writeln!(output, "ID: {}", record.id)?;
-            writeln!(output, "Name: {}", record.name)?;
-            writeln!(output, "Username: {}", record.username.unwrap_or(""))?;
-            writeln!(output, "URL: {}", record.url.unwrap_or(""))?;
-            writeln!(output, "Notes: {}", record.notes.unwrap_or(""))?;
-            let tag_names = record
-                .tags
-                .iter()
-                .map(|id| {
-                    tags.iter()
-                        .find(|tag| tag.id() == *id)
-                        .map(|tag| {
-                            if tag.is_technical() {
-                                format!("{} (technical)", tag.name())
-                            } else {
-                                tag.name().to_owned()
-                            }
-                        })
-                        .unwrap_or_else(|| format!("#tag-{id}"))
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            writeln!(output, "Tags: {tag_names}")?;
-            writeln!(
-                output,
-                "Password: {}",
-                if reveal {
-                    record.password()
-                } else {
-                    "********"
-                }
-            )?;
-            writeln!(
-                output,
-                "Created (Unix ms): {}",
-                record.created.as_unix_millis()
-            )?;
-            writeln!(
-                output,
-                "Updated (Unix ms): {}",
-                record.updated.as_unix_millis()
-            )?;
-            Ok(())
-        }
-        RecordCommand::Update {
-            record_id,
-            name,
-            username,
-            url,
-            notes,
-            password_stdin,
-            add_tag,
-            remove_tag,
-        } => {
-            let id = parse_record_id(&record_id)?;
-            let storage = session.ensure_storage(output, interactive)?;
-            let password = if password_stdin {
-                Some(read_record_password(input, output, interactive)?)
-            } else {
-                None
-            };
-            let changed = storage.update_record(
-                id,
-                RecordPatch {
-                    name,
-                    password,
-                    username: username.map_or(FieldUpdate::Keep, FieldUpdate::Set),
-                    url: url.map_or(FieldUpdate::Keep, FieldUpdate::Set),
-                    notes: notes.map_or(FieldUpdate::Keep, FieldUpdate::Set),
-                    add_tags: add_tag,
-                    remove_tags: remove_tag,
-                },
-            )?;
-            if changed {
-                success(output, format_args!("Record {id} updated"))
-            } else {
-                writeln!(output, "Record {id} unchanged")?;
-                Ok(())
-            }
-        }
-        RecordCommand::Delete { record_id } => {
-            let id = parse_record_id(&record_id)?;
-            session
-                .ensure_storage(output, interactive)?
-                .delete_record(id)?;
-            success(output, format_args!("Record {id} deleted"))
-        }
-    }
-}
-
-fn execute_tag(
-    command: TagCommand,
-    session: &mut Session,
-    output: &mut impl Write,
-    interactive: bool,
-) -> Result<()> {
-    match command {
-        TagCommand::Add { name } => {
-            let id = session
-                .ensure_storage(output, interactive)?
-                .create_tag(name)?;
-            success(output, format_args!("Tag created with ID {id}"))
-        }
-        TagCommand::List => {
-            let storage = session.ensure_storage(output, interactive)?;
-            for tag in storage.list_tags() {
-                if tag.is_technical() {
-                    writeln!(output, "{}\t{}\t(technical)", tag.id(), tag.name())?;
-                } else {
-                    writeln!(output, "{}\t{}", tag.id(), tag.name())?;
-                }
-            }
-            Ok(())
-        }
-        TagCommand::Delete { tag_id } => {
-            session
-                .ensure_storage(output, interactive)?
-                .delete_tag(tag_id)?;
-            success(output, format_args!("Tag {tag_id} deleted"))
-        }
-        TagCommand::Rename { tag_id, name } => {
-            session
-                .ensure_storage(output, interactive)?
-                .rename_tag(tag_id, name)?;
-            success(output, format_args!("Tag {tag_id} renamed"))
-        }
-        TagCommand::Recover => {
-            let count = session
-                .ensure_storage(output, interactive)?
-                .recover_tags()?;
-            success(
-                output,
-                format_args!("Tag catalog rebuilt with {count} tags"),
-            )
-        }
+        Command::Tag { command, .. } => records::execute_tag(command, session, output, interactive),
     }
 }
 
@@ -613,6 +352,7 @@ fn parse_record_id(value: &str) -> Result<RecordId> {
 }
 
 fn read_record_password(
+    session: &mut Session,
     input: &mut impl BufRead,
     output: &mut impl Write,
     interactive: bool,
@@ -620,7 +360,7 @@ fn read_record_password(
     if interactive {
         output::styled(output, output::PROMPT, "Password: ")?;
         output.flush()?;
-        return Ok(rpassword::read_password()?);
+        return Ok(session.read_secret()?);
     }
     let mut password = String::new();
     if input.read_line(&mut password)? == 0 {
@@ -644,7 +384,7 @@ fn success(output: &mut impl Write, message: impl std::fmt::Display) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use repass_storage::Storage;
+    use repass_storage::{NewRecord, Storage};
     use std::fs;
     use std::io::Cursor;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -795,6 +535,101 @@ mod tests {
             String::from_utf8(output)
                 .unwrap()
                 .contains("Tag catalog rebuilt")
+        );
+    }
+
+    #[test]
+    fn update_command_can_clear_optional_fields() {
+        let directory = TestDirectory::new();
+        let storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let mut session = Session::with_storage(directory.0.clone(), storage);
+        let id = session
+            .ensure_storage(&mut Vec::new(), false)
+            .unwrap()
+            .create_record(NewRecord {
+                name: "mail".into(),
+                password: "secret".into(),
+                username: Some("alice".into()),
+                url: Some("https://example.test".into()),
+                notes: Some("note".into()),
+                tags: Vec::new(),
+            })
+            .unwrap();
+
+        execute(
+            Command::Record {
+                data_dir: None,
+                command: RecordCommand::Update {
+                    record_id: id.to_string(),
+                    name: None,
+                    username: None,
+                    url: None,
+                    notes: None,
+                    clear_username: true,
+                    clear_url: true,
+                    clear_notes: true,
+                    password_stdin: false,
+                    add_tag: Vec::new(),
+                    remove_tag: Vec::new(),
+                },
+            },
+            &mut session,
+            &mut Cursor::new(Vec::new()),
+            &mut Vec::new(),
+            false,
+        )
+        .unwrap();
+
+        let record = session
+            .ensure_storage(&mut Vec::new(), false)
+            .unwrap()
+            .get_record(id)
+            .unwrap();
+        assert_eq!(record.username, None);
+        assert_eq!(record.url, None);
+        assert_eq!(record.notes, None);
+    }
+
+    #[test]
+    fn interactive_master_and_record_passwords_use_injected_secret_input() {
+        let directory = TestDirectory::new();
+        Storage::create_in(&directory.0, b"master").unwrap();
+        let mut session = Session::with_passwords(
+            directory.0.clone(),
+            ["master".to_owned(), "record-secret".to_owned()],
+        );
+        let mut output = Vec::new();
+        execute(
+            Command::Record {
+                data_dir: None,
+                command: RecordCommand::Add {
+                    name: "mail".into(),
+                    password_stdin: true,
+                    username: None,
+                    url: None,
+                    notes: None,
+                    tag: Vec::new(),
+                },
+            },
+            &mut session,
+            &mut Cursor::new(Vec::new()),
+            &mut output,
+            true,
+        )
+        .unwrap();
+
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("Master password:"));
+        assert!(text.contains("Password:"));
+        assert!(!text.contains("record-secret"));
+        assert_eq!(
+            session
+                .ensure_storage(&mut Vec::new(), true)
+                .unwrap()
+                .get_record(RecordId::new(1))
+                .unwrap()
+                .password(),
+            "record-secret"
         );
     }
 }

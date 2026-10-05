@@ -1,4 +1,5 @@
 use crate::StorageError;
+use crate::persistence::PersistedRecord;
 use crate::record::types::Timestamp;
 use crate::tags::TagId;
 use serde::{Deserialize, Serialize};
@@ -6,7 +7,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-pub mod serialize;
 pub mod types;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -37,19 +37,10 @@ impl FromStr for RecordId {
     }
 }
 
-/// In-memory record columns. The position map is an ephemeral index and is
-/// rebuilt from `ids` when the persisted state is loaded.
+/// In-memory records with an ephemeral position index rebuilt on load.
 #[derive(Clone)]
-pub struct Records {
-    ids: Vec<RecordId>,
-    names: Vec<String>,
-    passwords: Vec<String>,
-    usernames: Vec<Option<String>>,
-    urls: Vec<Option<String>>,
-    notes: Vec<Option<String>>,
-    tags: Vec<Vec<TagId>>,
-    created: Vec<Timestamp>,
-    updated: Vec<Timestamp>,
+pub(crate) struct Records {
+    rows: Vec<Record>,
     positions: HashMap<RecordId, usize>,
     next_id: Option<u64>,
 }
@@ -104,8 +95,8 @@ pub struct NewRecord {
     pub tags: Vec<TagId>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct PersistedRecord {
+#[derive(Clone)]
+pub(crate) struct Record {
     pub id: RecordId,
     pub name: String,
     pub password: String,
@@ -122,40 +113,42 @@ impl Records {
         Self::default()
     }
 
+    #[cfg(test)]
     pub(crate) fn from_persisted(
         records: Vec<PersistedRecord>,
         next_id: Option<u64>,
     ) -> Result<Self, StorageError> {
-        let mut result = Self::default();
+        let rows = records.into_iter().map(Record::from).collect();
+        Self::from_records(rows, next_id)
+    }
+
+    pub(crate) fn from_records(
+        rows: Vec<Record>,
+        next_id: Option<u64>,
+    ) -> Result<Self, StorageError> {
+        let mut positions = HashMap::with_capacity(rows.len());
         let mut maximum = None;
-        for record in records {
-            if result.positions.contains_key(&record.id) {
+        for (position, record) in rows.iter().enumerate() {
+            if positions.contains_key(&record.id) {
                 return Err(StorageError::DuplicateRecordId(record.id));
             }
             if record.name.is_empty() {
                 return Err(StorageError::InvalidState("record name cannot be empty"));
             }
-            let record_tags = unique_tags(record.tags)?;
-            let position = result.ids.len();
+            validate_unique_tags(&record.tags)?;
             maximum = Some(maximum.map_or(record.id.0, |current: u64| current.max(record.id.0)));
-            result.positions.insert(record.id, position);
-            result.ids.push(record.id);
-            result.names.push(record.name);
-            result.passwords.push(record.password);
-            result.usernames.push(record.username);
-            result.urls.push(record.url);
-            result.notes.push(record.notes);
-            result.tags.push(record_tags);
-            result.created.push(record.created);
-            result.updated.push(record.updated);
+            positions.insert(record.id, position);
         }
         if maximum.is_some_and(|maximum| next_id.is_some_and(|next| next <= maximum)) {
             return Err(StorageError::InvalidState(
                 "next record ID must be greater than all stored record IDs",
             ));
         }
-        result.next_id = next_id;
-        Ok(result)
+        Ok(Self {
+            rows,
+            positions,
+            next_id,
+        })
     }
 
     pub fn get(&self, id: RecordId) -> Option<RecordView<'_>> {
@@ -166,40 +159,31 @@ impl Records {
     }
 
     pub fn views(&self) -> Vec<RecordView<'_>> {
-        let mut positions: Vec<_> = (0..self.ids.len()).collect();
-        positions.sort_unstable_by_key(|position| self.ids[*position]);
-        positions
-            .into_iter()
-            .map(|position| self.view_at(position))
-            .collect()
+        let mut records: Vec<_> = self.rows.iter().collect();
+        records.sort_unstable_by_key(|record| record.id);
+        records.into_iter().map(Self::view_of).collect()
     }
 
     pub fn len(&self) -> usize {
-        self.ids.len()
+        self.rows.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.ids.is_empty()
-    }
-
-    pub fn find_by_login(&self, login: &str) -> Vec<RecordId> {
-        self.ids
+    pub fn find_by_name(&self, name: &str) -> Vec<RecordId> {
+        self.rows
             .iter()
-            .enumerate()
-            .filter_map(|(position, id)| (self.names[position] == login).then_some(*id))
+            .filter_map(|record| (record.name == name).then_some(record.id))
             .collect()
     }
 
     /// Finds records that contain every requested tag. An empty query matches
     /// every record.
     pub fn find_by_tags(&self, tags: &[TagId]) -> Vec<RecordId> {
-        self.ids
+        self.rows
             .iter()
-            .enumerate()
-            .filter_map(|(position, id)| {
+            .filter_map(|record| {
                 tags.iter()
-                    .all(|tag| self.tags[position].contains(tag))
-                    .then_some(*id)
+                    .all(|tag| record.tags.contains(tag))
+                    .then_some(record.id)
             })
             .collect()
     }
@@ -215,16 +199,18 @@ impl Records {
         let record_tags = unique_tags(record.tags)?;
         let value = self.next_id.ok_or(StorageError::RecordIdExhausted)?;
         let id = RecordId(value);
-        let position = self.ids.len();
-        self.ids.push(id);
-        self.names.push(record.name);
-        self.passwords.push(record.password);
-        self.usernames.push(record.username);
-        self.urls.push(record.url);
-        self.notes.push(record.notes);
-        self.tags.push(record_tags);
-        self.created.push(timestamp.clone());
-        self.updated.push(timestamp);
+        let position = self.rows.len();
+        self.rows.push(Record {
+            id,
+            name: record.name,
+            password: record.password,
+            username: record.username,
+            url: record.url,
+            notes: record.notes,
+            tags: record_tags,
+            created: timestamp,
+            updated: timestamp,
+        });
         self.positions.insert(id, position);
         self.next_id = value.checked_add(1);
         Ok(id)
@@ -235,17 +221,9 @@ impl Records {
             .positions
             .remove(&id)
             .ok_or(StorageError::RecordNotFound(id))?;
-        self.ids.swap_remove(position);
-        self.names.swap_remove(position);
-        self.passwords.swap_remove(position);
-        self.usernames.swap_remove(position);
-        self.urls.swap_remove(position);
-        self.notes.swap_remove(position);
-        self.tags.swap_remove(position);
-        self.created.swap_remove(position);
-        self.updated.swap_remove(position);
-        if let Some(moved_id) = self.ids.get(position).copied() {
-            self.positions.insert(moved_id, position);
+        self.rows.swap_remove(position);
+        if let Some(moved_record) = self.rows.get(position) {
+            self.positions.insert(moved_record.id, position);
         }
         Ok(())
     }
@@ -270,59 +248,46 @@ impl Records {
         }
 
         let mut changed = false;
+        let record = &mut self.rows[position];
         if let Some(name) = &patch.name {
-            if self.names[position] != *name {
-                self.names[position].clone_from(name);
+            if record.name != *name {
+                record.name.clone_from(name);
                 changed = true;
             }
         }
         if let Some(password) = &patch.password {
-            if self.passwords[position] != *password {
-                self.passwords[position].clone_from(password);
+            if record.password != *password {
+                record.password.clone_from(password);
                 changed = true;
             }
         }
-        changed |= apply_field(&mut self.usernames[position], &patch.username);
-        changed |= apply_field(&mut self.urls[position], &patch.url);
-        changed |= apply_field(&mut self.notes[position], &patch.notes);
+        changed |= apply_field(&mut record.username, &patch.username);
+        changed |= apply_field(&mut record.url, &patch.url);
+        changed |= apply_field(&mut record.notes, &patch.notes);
 
         for tag in add {
-            if !self.tags[position].contains(&tag) {
-                self.tags[position].push(tag);
+            if !record.tags.contains(&tag) {
+                record.tags.push(tag);
                 changed = true;
             }
         }
         for tag in remove {
-            let length = self.tags[position].len();
-            self.tags[position].retain(|existing| *existing != tag);
-            changed |= self.tags[position].len() != length;
+            let length = record.tags.len();
+            record.tags.retain(|existing| *existing != tag);
+            changed |= record.tags.len() != length;
         }
         if changed {
-            self.updated[position] = timestamp;
+            record.updated = timestamp;
         }
         Ok(changed)
     }
 
     pub(crate) fn uses_tag(&self, tag: TagId) -> bool {
-        self.tags
-            .iter()
-            .any(|record_tags| record_tags.contains(&tag))
+        self.rows.iter().any(|record| record.tags.contains(&tag))
     }
 
     pub(crate) fn persisted(&self) -> Vec<PersistedRecord> {
-        (0..self.ids.len())
-            .map(|position| PersistedRecord {
-                id: self.ids[position],
-                name: self.names[position].clone(),
-                password: self.passwords[position].clone(),
-                username: self.usernames[position].clone(),
-                url: self.urls[position].clone(),
-                notes: self.notes[position].clone(),
-                tags: self.tags[position].clone(),
-                created: self.created[position].clone(),
-                updated: self.updated[position].clone(),
-            })
-            .collect()
+        self.rows.iter().map(PersistedRecord::from).collect()
     }
 
     pub(crate) fn next_id(&self) -> Option<u64> {
@@ -330,9 +295,9 @@ impl Records {
     }
 
     pub(crate) fn used_tag_ids(&self) -> Vec<TagId> {
-        self.tags
+        self.rows
             .iter()
-            .flatten()
+            .flat_map(|record| record.tags.iter())
             .copied()
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -340,16 +305,52 @@ impl Records {
     }
 
     fn view_at(&self, position: usize) -> RecordView<'_> {
+        Self::view_of(&self.rows[position])
+    }
+
+    fn view_of(record: &Record) -> RecordView<'_> {
         RecordView {
-            id: self.ids[position],
-            name: &self.names[position],
-            username: self.usernames[position].as_deref(),
-            url: self.urls[position].as_deref(),
-            notes: self.notes[position].as_deref(),
-            tags: &self.tags[position],
-            created: &self.created[position],
-            updated: &self.updated[position],
-            password: &self.passwords[position],
+            id: record.id,
+            name: &record.name,
+            username: record.username.as_deref(),
+            url: record.url.as_deref(),
+            notes: record.notes.as_deref(),
+            tags: &record.tags,
+            created: &record.created,
+            updated: &record.updated,
+            password: &record.password,
+        }
+    }
+}
+
+impl From<PersistedRecord> for Record {
+    fn from(record: PersistedRecord) -> Self {
+        Self {
+            id: record.id,
+            name: record.name,
+            password: record.password,
+            username: record.username,
+            url: record.url,
+            notes: record.notes,
+            tags: record.tags,
+            created: record.created,
+            updated: record.updated,
+        }
+    }
+}
+
+impl From<&Record> for PersistedRecord {
+    fn from(record: &Record) -> Self {
+        Self {
+            id: record.id,
+            name: record.name.clone(),
+            password: record.password.clone(),
+            username: record.username.clone(),
+            url: record.url.clone(),
+            notes: record.notes.clone(),
+            tags: record.tags.clone(),
+            created: record.created,
+            updated: record.updated,
         }
     }
 }
@@ -357,30 +358,25 @@ impl Records {
 impl Default for Records {
     fn default() -> Self {
         Self {
-            ids: Vec::new(),
-            names: Vec::new(),
-            passwords: Vec::new(),
-            usernames: Vec::new(),
-            urls: Vec::new(),
-            notes: Vec::new(),
-            tags: Vec::new(),
-            created: Vec::new(),
-            updated: Vec::new(),
+            rows: Vec::new(),
             positions: HashMap::new(),
             next_id: Some(1),
         }
     }
 }
 
-fn unique_tags(tags: Vec<TagId>) -> Result<Vec<TagId>, StorageError> {
-    let mut unique = Vec::with_capacity(tags.len());
-    for tag in tags {
-        if unique.contains(&tag) {
-            return Err(StorageError::DuplicateRecordTag(tag));
+fn validate_unique_tags(tags: &[TagId]) -> Result<(), StorageError> {
+    for (index, tag) in tags.iter().enumerate() {
+        if tags[..index].contains(tag) {
+            return Err(StorageError::DuplicateRecordTag(*tag));
         }
-        unique.push(tag);
     }
-    Ok(unique)
+    Ok(())
+}
+
+fn unique_tags(tags: Vec<TagId>) -> Result<Vec<TagId>, StorageError> {
+    validate_unique_tags(&tags)?;
+    Ok(tags)
 }
 
 fn apply_field(target: &mut Option<String>, update: &FieldUpdate<String>) -> bool {
@@ -413,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn swap_remove_keeps_columns_and_stable_id_index_consistent() {
+    fn swap_remove_keeps_records_and_stable_id_index_consistent() {
         let now = Timestamp::from_unix_millis(10);
         let mut records = Records::new();
         let first = records.create(new_record("first"), now.clone()).unwrap();
@@ -424,8 +420,8 @@ mod tests {
         assert!(records.get(middle).is_none());
         assert_eq!(records.get(first).unwrap().name, "first");
         assert_eq!(records.get(last).unwrap().name, "last");
-        assert_eq!(records.find_by_login("last"), vec![last]);
-        assert!(records.columns_are_aligned());
+        assert_eq!(records.find_by_name("last"), vec![last]);
+        assert!(records.index_is_aligned());
     }
 
     #[test]
@@ -452,15 +448,15 @@ mod tests {
             records.update(
                 id,
                 &RecordPatch {
-                    add_tags: vec![1],
-                    remove_tags: vec![1],
+                    add_tags: vec![TagId::new(1)],
+                    remove_tags: vec![TagId::new(1)],
                     ..RecordPatch::default()
                 },
                 Timestamp::from_unix_millis(30)
             ),
-            Err(StorageError::ConflictingTagUpdate(1))
+            Err(StorageError::ConflictingTagUpdate(tag)) if tag == TagId::new(1)
         ));
-        assert!(records.columns_are_aligned());
+        assert!(records.index_is_aligned());
     }
 
     #[test]
@@ -475,30 +471,17 @@ mod tests {
             Records::from_persisted(vec![persisted[0].clone(), persisted[0].clone()], Some(2)),
             Err(StorageError::DuplicateRecordId(_))
         ));
-        assert!(restored.columns_are_aligned());
+        assert!(restored.index_is_aligned());
     }
 
     impl Records {
-        fn columns_are_aligned(&self) -> bool {
-            let len = self.ids.len();
-            [
-                self.names.len(),
-                self.passwords.len(),
-                self.usernames.len(),
-                self.urls.len(),
-                self.notes.len(),
-                self.tags.len(),
-                self.created.len(),
-                self.updated.len(),
-                self.positions.len(),
-            ]
-            .into_iter()
-            .all(|column| column == len)
+        fn index_is_aligned(&self) -> bool {
+            self.positions.len() == self.rows.len()
                 && self
-                    .ids
+                    .rows
                     .iter()
                     .enumerate()
-                    .all(|(position, id)| self.positions.get(id) == Some(&position))
+                    .all(|(position, record)| self.positions.get(&record.id) == Some(&position))
         }
     }
 }

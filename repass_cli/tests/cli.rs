@@ -68,6 +68,23 @@ fn one_shot_missing_arguments_and_interactive_only_switch_are_errors() {
 }
 
 #[test]
+fn update_clear_flags_conflict_with_setting_the_same_optional_field() {
+    for field in ["username", "url", "notes"] {
+        let clear_flag = format!("--clear-{field}");
+        let set_flag = format!("--{field}");
+        let output = cli()
+            .args(["record", "update", "1"])
+            .arg(&clear_flag)
+            .arg(&set_flag)
+            .arg("value")
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{clear_flag} and {set_flag}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
+    }
+}
+
+#[test]
 fn all_separator_names_and_numbers_generate_with_exact_length() {
     let dictionary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unicode.txt");
     for (name, number) in [

@@ -311,15 +311,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
-name = "frizbee"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19435f276a44d90570cb403d22fbe4b20c80eabc134f718d6ec0ae888eb47edc"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -523,11 +514,8 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
- "cobs",
- "frizbee",
  "postcard",
  "rand",
- "repass_generator",
  "serde",
 ]
 

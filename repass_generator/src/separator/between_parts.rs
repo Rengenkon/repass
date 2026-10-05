@@ -8,11 +8,13 @@ pub struct BetweenPartsSeparator<'a> {
 }
 
 impl<'a> BetweenPartsSeparator<'a> {
-    pub fn new(separator: &'a str) -> Self {
-        Self {
+    pub fn new(separator: &'a str) -> Result<Self, SeparatorError> {
+        let separator = Self {
             separator,
             separator_chars: separator.chars().count(),
-        }
+        };
+        separator.validate()?;
+        Ok(separator)
     }
 }
 
@@ -88,7 +90,7 @@ mod tests {
 
     #[test]
     fn computes_between_part_chars_for_multichar_separator() {
-        let separator = BetweenPartsSeparator::new("🟠-");
+        let separator = BetweenPartsSeparator::new("🟠-").unwrap();
         let parts = ["猫", "é"];
         assert_eq!(separator.separate(&parts).unwrap(), "猫🟠-é");
         assert_eq!(separator.separated_chars(&parts).unwrap(), 4);
@@ -96,9 +98,9 @@ mod tests {
 
     #[test]
     fn rejects_empty_separator_without_panicking() {
-        assert_eq!(
-            BetweenPartsSeparator::new("").validate(),
+        assert!(matches!(
+            BetweenPartsSeparator::new(""),
             Err(SeparatorError::EmptySeparator)
-        );
+        ));
     }
 }

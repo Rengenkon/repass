@@ -31,10 +31,14 @@ impl FileDictionary {
                 dictionary.push(buf);
             }
         }
-        Ok(Self {
+        let result = Self {
             dictionary,
             known_entries: None,
-        })
+        };
+        result
+            .validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        Ok(result)
     }
 
     pub fn from_entries<I, S>(entries: I) -> Result<Self, GeneratorError>
@@ -200,6 +204,8 @@ impl<'a> Dictionary<'a> for FileDictionary {
 mod tests {
     use super::FileDictionary;
     use crate::dictionary::Dictionary;
+    use crate::error::GeneratorError;
+    use std::io;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn temporary_test_path(name: &str) -> std::path::PathBuf {
@@ -226,6 +232,20 @@ mod tests {
     #[test]
     fn rejects_empty_entry() {
         assert!(FileDictionary::from_entries(["valid", ""]).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_entries_from_constructors_and_files() {
+        assert!(matches!(
+            FileDictionary::from_entries(["same", "same"]),
+            Err(GeneratorError::DuplicateDictionaryEntry(entry)) if entry == "same"
+        ));
+
+        let path = temporary_test_path("duplicate-loader");
+        std::fs::write(&path, "same\nsame\n").unwrap();
+        let error = FileDictionary::from_path(&path).err().unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]

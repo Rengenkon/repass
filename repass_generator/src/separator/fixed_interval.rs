@@ -12,12 +12,14 @@ pub struct FixedIntervalSeparator<'a> {
 }
 
 impl<'a> FixedIntervalSeparator<'a> {
-    pub fn new(separator: &'a str, interval_chars: usize) -> Self {
-        Self {
+    pub fn new(separator: &'a str, interval_chars: usize) -> Result<Self, SeparatorError> {
+        let separator = Self {
             separator,
             separator_chars: separator.chars().count(),
             interval_chars,
-        }
+        };
+        separator.validate()?;
+        Ok(separator)
     }
 }
 
@@ -114,7 +116,7 @@ mod tests {
 
     #[test]
     fn inserts_at_unicode_scalar_boundaries() {
-        let separator = FixedIntervalSeparator::new("🟠", 2);
+        let separator = FixedIntervalSeparator::new("🟠", 2).unwrap();
         let parts = ["é🦀", "猫x"];
         let result = separator.separate(&parts).unwrap();
         assert_eq!(result, "é🦀🟠猫x");
@@ -126,16 +128,16 @@ mod tests {
 
     #[test]
     fn invalid_interval_is_reported() {
-        assert_eq!(
-            FixedIntervalSeparator::new("-", 0).validate(),
+        assert!(matches!(
+            FixedIntervalSeparator::new("-", 0),
             Err(SeparatorError::ZeroInterval)
-        );
+        ));
     }
 
     #[test]
     fn output_chars_matches_rendered_output_across_boundaries() {
         for interval in [1, 2, 3, 5] {
-            let separator = FixedIntervalSeparator::new("::", interval);
+            let separator = FixedIntervalSeparator::new("::", interval).unwrap();
             for input in ["a", "abc", "abcdef", "é🦀猫x"] {
                 let parts = [input];
                 assert_eq!(
@@ -148,7 +150,7 @@ mod tests {
 
     #[test]
     fn writes_into_existing_buffer_without_replacing_prefix() {
-        let separator = FixedIntervalSeparator::new("-", 2);
+        let separator = FixedIntervalSeparator::new("-", 2).unwrap();
         let mut output = String::from("prefix:");
         separator.write_separated(&["abcd"], &mut output).unwrap();
         assert_eq!(output, "prefix:ab-cd");

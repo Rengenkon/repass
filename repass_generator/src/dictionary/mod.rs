@@ -1,4 +1,5 @@
 use crate::error::{DictionaryError, GeneratorError};
+use std::collections::HashSet;
 
 pub mod cache;
 pub mod file_dictionary;
@@ -8,7 +9,8 @@ pub mod presets;
 pub trait Dictionary<'a> {
     fn entry(&self, index: usize) -> Option<&str>;
 
-    /// Adds entries atomically. Empty and duplicate entries are rejected.
+    /// Adds entries atomically. Empty and duplicate entries are rejected. A valid
+    /// dictionary contains only unique, non-empty entries.
     fn add(&mut self, values: &'a [&'a str]) -> Result<(), DictionaryError>;
 
     fn len(&self) -> usize;
@@ -21,10 +23,17 @@ pub trait Dictionary<'a> {
         if self.is_empty() {
             return Err(GeneratorError::EmptyDictionary);
         }
+        let mut unique = HashSet::new();
+        unique
+            .try_reserve(self.len())
+            .map_err(|_| GeneratorError::DictionaryValidationResourceLimit)?;
         for index in 0..self.len() {
             match self.entry(index) {
                 Some("") => return Err(GeneratorError::EmptyDictionaryEntry),
                 None => return Err(GeneratorError::EmptyDictionary),
+                Some(entry) if !unique.insert(entry) => {
+                    return Err(GeneratorError::DuplicateDictionaryEntry(entry.to_owned()));
+                }
                 Some(_) => {}
             }
         }

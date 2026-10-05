@@ -1,6 +1,6 @@
 use crate::dictionary::Dictionary;
 use crate::error::DictionaryError;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 pub fn digits() -> &'static [&'static str] {
     &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
@@ -77,18 +77,16 @@ fn preset_sets() -> [(PresetMask, &'static [&'static str]); 9] {
 /// All entries are borrowed and must outlive the dictionary.
 pub struct PresetDictionary<'a> {
     preset_mask: PresetMask,
-    dictionary: BTreeMap<usize, &'a [&'a str]>,
-    entry_count: usize,
-    known_entries: Option<HashSet<&'a str>>,
+    dictionary: Vec<&'a str>,
+    known_entries: HashSet<&'a str>,
 }
 
 impl<'a> PresetDictionary<'a> {
     pub fn new() -> Self {
         Self {
             preset_mask: 0,
-            dictionary: BTreeMap::new(),
-            entry_count: 0,
-            known_entries: None,
+            dictionary: Vec::new(),
+            known_entries: HashSet::new(),
         }
     }
 
@@ -111,15 +109,12 @@ impl<'a> PresetDictionary<'a> {
         if self.preset_mask & bit != 0 {
             return;
         }
-        self.dictionary.insert(self.entry_count, values);
-        self.entry_count += values.len();
-        self.preset_mask |= bit;
-
-        if let Some(known_entries) = &mut self.known_entries {
-            for value in values {
-                known_entries.insert(value);
+        for value in values {
+            if self.known_entries.insert(value) {
+                self.dictionary.push(value);
             }
         }
+        self.preset_mask |= bit;
     }
 
     pub fn add_all_presets(&mut self) -> &mut Self {
@@ -185,14 +180,7 @@ impl<'a> PresetDictionary<'a> {
 
 impl<'a> Dictionary<'a> for PresetDictionary<'a> {
     fn entry(&self, index: usize) -> Option<&str> {
-        let (segment_start, segment) = self.dictionary.range(..=index).next_back()?;
-        let offset = index.checked_sub(*segment_start)?;
-        let entry: Option<&&str> = segment.get(offset);
-        let entry: Option<&str> = match entry {
-            Some(value) => Some(*value),
-            None => None,
-        };
-        entry
+        self.dictionary.get(index).copied()
     }
 
     fn add(&mut self, values: &'a [&'a str]) -> Result<(), DictionaryError> {
@@ -200,77 +188,41 @@ impl<'a> Dictionary<'a> for PresetDictionary<'a> {
             return Ok(());
         }
 
-        let new_entry_count = self
-            .entry_count
-            .checked_add(values.len())
-            .ok_or(DictionaryError::ResourceLimit)?;
-
-        if let Some(known_entries) = &mut self.known_entries {
-            let mut incoming_entries = HashSet::new();
-            incoming_entries
-                .try_reserve(values.len())
-                .map_err(|_| DictionaryError::ResourceLimit)?;
-
-            for value in values {
-                if value.is_empty() {
-                    return Err(DictionaryError::EmptyEntry);
-                }
-                if known_entries.contains(value) || !incoming_entries.insert(*value) {
-                    return Err(DictionaryError::DuplicateEntry((*value).to_owned()));
-                }
+        let mut incoming_entries = HashSet::new();
+        incoming_entries
+            .try_reserve(values.len())
+            .map_err(|_| DictionaryError::ResourceLimit)?;
+        for value in values {
+            if value.is_empty() {
+                return Err(DictionaryError::EmptyEntry);
             }
-
-            // Reserve before changing the dictionary so allocation failure is atomic.
-            known_entries
-                .try_reserve(values.len())
-                .map_err(|_| DictionaryError::ResourceLimit)?;
-
-            self.dictionary.insert(self.entry_count, values);
-            self.entry_count = new_entry_count;
-
-            for value in values {
-                known_entries.insert(*value);
+            if self.known_entries.contains(value) || !incoming_entries.insert(*value) {
+                return Err(DictionaryError::DuplicateEntry((*value).to_owned()));
             }
-        } else {
-            let mut known_entries = HashSet::new();
-            known_entries
-                .try_reserve(new_entry_count)
-                .map_err(|_| DictionaryError::ResourceLimit)?;
-            for entries in self.dictionary.values() {
-                for value in *entries {
-                    known_entries.insert(*value);
-                }
-            }
-            for value in values {
-                if value.is_empty() {
-                    return Err(DictionaryError::EmptyEntry);
-                }
-                if !known_entries.insert(*value) {
-                    return Err(DictionaryError::DuplicateEntry((*value).to_owned()));
-                }
-            }
+        }
 
-            self.dictionary.insert(self.entry_count, values);
-            self.entry_count = new_entry_count;
-            self.known_entries = Some(known_entries);
+        self.dictionary
+            .try_reserve(values.len())
+            .map_err(|_| DictionaryError::ResourceLimit)?;
+        self.known_entries
+            .try_reserve(values.len())
+            .map_err(|_| DictionaryError::ResourceLimit)?;
+        for value in values {
+            self.known_entries.insert(*value);
+            self.dictionary.push(value);
         }
 
         Ok(())
     }
 
     fn len(&self) -> usize {
-        self.entry_count
+        self.dictionary.len()
     }
 }
 
 impl Default for PresetDictionary<'static> {
     fn default() -> Self {
-        Self {
-            preset_mask: DIGITS_MASK,
-            dictionary: BTreeMap::from([(0, digits())]),
-            entry_count: digits().len(),
-            known_entries: None,
-        }
+        Self::from_preset_mask(DIGITS_MASK)
     }
 }
 
@@ -303,11 +255,11 @@ mod tests {
         let mut dictionary = PresetDictionary::new();
         dictionary.add_digits();
         let mask = dictionary.preset_mask();
-        assert!(dictionary.known_entries.is_none());
+        let len = dictionary.len();
 
         dictionary.add_digits();
         assert_eq!(dictionary.preset_mask(), mask);
-        assert!(dictionary.known_entries.is_none());
+        assert_eq!(dictionary.len(), len);
     }
 
     #[test]
@@ -318,9 +270,9 @@ mod tests {
             Err(DictionaryError::DuplicateEntry("0".to_owned()))
         );
         assert_eq!(dictionary.len(), digits().len());
-        assert!(dictionary.known_entries.is_none());
+        assert_eq!(dictionary.known_entries.len(), digits().len());
         dictionary.add(&CUSTOM_VALUES).unwrap();
-        assert!(dictionary.known_entries.is_some());
+        assert_eq!(dictionary.known_entries.len(), digits().len() + 2);
         assert_eq!(dictionary.entry(dictionary.len() - 1), Some("🦀"));
         assert_eq!(
             dictionary.add(&CUSTOM_VALUES[..1]),
@@ -334,16 +286,10 @@ mod tests {
 
         let mut dictionary = PresetDictionary::new();
         dictionary.add(&CUSTOM_VALUE).unwrap();
-        assert!(dictionary.known_entries.is_some());
+        assert!(dictionary.known_entries.contains("custom"));
 
         dictionary.add_digits();
-        let known_entries = dictionary.known_entries.as_ref();
-        assert!(known_entries.is_some());
-        let contains_number = match known_entries {
-            Some(entries) => entries.contains("0"),
-            None => false,
-        };
-        assert!(contains_number);
+        assert!(dictionary.known_entries.contains("0"));
 
         static NUMBER_VALUE: [&str; 1] = ["0"];
         assert_eq!(
@@ -361,11 +307,23 @@ mod tests {
             Err(DictionaryError::DuplicateEntry("unique".to_owned()))
         );
         assert_eq!(dictionary.len(), 0);
-        assert!(dictionary.known_entries.is_none());
+        assert!(dictionary.known_entries.is_empty());
     }
 
     #[test]
-    fn preset_and_custom_entries_are_read_from_ordered_segments() {
+    fn overlapping_custom_and_preset_values_are_kept_once() {
+        static NUMBER: [&str; 1] = ["0"];
+        let mut dictionary = PresetDictionary::new();
+        dictionary.add(&NUMBER).unwrap();
+        dictionary.add_digits();
+
+        assert_eq!(dictionary.len(), digits().len());
+        assert_eq!(dictionary.entry(0), Some("0"));
+        assert!(crate::dictionary::cache::DictionaryCache::new(dictionary).is_ok());
+    }
+
+    #[test]
+    fn preset_and_custom_entries_keep_insertion_order() {
         let mut dictionary = PresetDictionary::new();
         dictionary.add(&FIRST_VALUES).unwrap();
         dictionary.add(&THIRD_VALUES).unwrap();

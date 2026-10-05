@@ -9,6 +9,8 @@ pub enum GeneratorError {
     ZeroPasswordLength,
     EmptyDictionary,
     EmptyDictionaryEntry,
+    DuplicateDictionaryEntry(String),
+    DictionaryValidationResourceLimit,
     InvalidDictionaryEntry {
         index: usize,
     },
@@ -59,6 +61,12 @@ impl Display for GeneratorError {
             }
             Self::EmptyDictionary => write!(f, "dictionary is empty"),
             Self::EmptyDictionaryEntry => write!(f, "dictionary entries must not be empty"),
+            Self::DuplicateDictionaryEntry(entry) => {
+                write!(f, "dictionary contains duplicate entry {entry:?}")
+            }
+            Self::DictionaryValidationResourceLimit => {
+                write!(f, "not enough memory to validate dictionary entries")
+            }
             Self::InvalidDictionaryEntry { index } => {
                 write!(f, "dictionary does not provide an entry at index {index}")
             }

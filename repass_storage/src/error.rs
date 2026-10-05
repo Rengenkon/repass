@@ -1,5 +1,5 @@
+use crate::VaultError;
 use crate::record::RecordId;
-use crate::record::serialize::VaultError;
 use crate::tags::TagId;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -9,6 +9,7 @@ use std::io;
 pub enum StorageError {
     Io(io::Error),
     Vault(VaultError),
+    MetadataCountsUpdateAfterDataSave(VaultError),
     DuplicateRecordId(RecordId),
     RecordIdExhausted,
     RecordNotFound(RecordId),
@@ -32,6 +33,10 @@ impl Display for StorageError {
         match self {
             Self::Io(error) => write!(formatter, "storage I/O error: {error}"),
             Self::Vault(error) => Display::fmt(error, formatter),
+            Self::MetadataCountsUpdateAfterDataSave(error) => write!(
+                formatter,
+                "data was saved, but metadata counts could not be updated: {error}"
+            ),
             Self::DuplicateRecordId(id) => write!(formatter, "duplicate record ID {id}"),
             Self::RecordIdExhausted => formatter.write_str("record ID space is exhausted"),
             Self::RecordNotFound(id) => write!(formatter, "record {id} was not found"),
@@ -73,6 +78,7 @@ impl Error for StorageError {
         match self {
             Self::Io(error) => Some(error),
             Self::Vault(error) => Some(error),
+            Self::MetadataCountsUpdateAfterDataSave(error) => Some(error),
             _ => None,
         }
     }

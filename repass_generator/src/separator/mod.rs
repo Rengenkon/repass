@@ -248,10 +248,18 @@ pub(super) fn find_content_chars(
     Ok(None)
 }
 
+/// Extensible strategy for describing and rendering password part layouts.
+///
+/// Implementations must return a finite sequence of feasible shapes, and each
+/// shape's `content_chars`/`part_count` must agree with `output_chars`. The
+/// rendered string from `separate` must have that same Unicode scalar count.
+/// The generator checks the rendered count as a final contract guard.
 pub trait Separator {
     fn validate(&self) -> Result<(), SeparatorError>;
 
     /// Enumerates finite input shapes that can produce the requested output character count.
+    /// Custom implementations must ensure iteration terminates; the generator
+    /// additionally applies its configured shape-search limit.
     fn requirement_for_output(
         &self,
         target_chars: usize,
@@ -325,7 +333,7 @@ mod requirement_tests {
 
     #[test]
     fn between_parts_shapes_are_generated_on_demand() {
-        let separator = BetweenPartsSeparator::new("--");
+        let separator = BetweenPartsSeparator::new("--").unwrap();
         let requirement = separator.requirement_for_output(8).unwrap();
         let mut shapes = requirement.into_shapes();
         assert_eq!(shapes.next(), Some(SeparationShape::new(8, 1)));
@@ -336,12 +344,14 @@ mod requirement_tests {
     fn interval_and_fixed_count_detect_unreachable_target_chars() {
         assert!(matches!(
             FixedIntervalSeparator::new("-", 3)
+                .unwrap()
                 .requirement_for_output(12)
                 .unwrap(),
             SeparationRequirement::Impossible { target_chars: 12 }
         ));
         assert!(matches!(
             FixedCountSeparator::new("::", 2)
+                .unwrap()
                 .requirement_for_output(3)
                 .unwrap(),
             SeparationRequirement::Impossible { target_chars: 3 }
@@ -350,7 +360,7 @@ mod requirement_tests {
 
     #[test]
     fn layout_reports_content_separator_and_output_char_counts() {
-        let separator = BetweenPartsSeparator::new("🟠-");
+        let separator = BetweenPartsSeparator::new("🟠-").unwrap();
         let layout = separator.layout_for(InputShape::new(5, 3)).unwrap();
         assert_eq!(layout.input_shape().content_chars(), 5);
         assert_eq!(layout.input_shape().part_count(), 3);

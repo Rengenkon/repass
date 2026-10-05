@@ -9,7 +9,7 @@ repass vault [--data-dir <DIR>] info
 repass record [--data-dir <DIR>] add --name <NAME> --password-stdin [--username <TEXT>] [--url <URL>] [--notes <TEXT>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] list [--tag <TAG_ID>]
 repass record [--data-dir <DIR>] show <RECORD_ID> [--reveal]
-repass record [--data-dir <DIR>] update <RECORD_ID> [--name <NAME>] [--username <TEXT>] [--url <URL>] [--notes <TEXT>] [--password-stdin] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
+repass record [--data-dir <DIR>] update <RECORD_ID> [--name <NAME>] [--username <TEXT> | --clear-username] [--url <URL> | --clear-url] [--notes <TEXT> | --clear-notes] [--password-stdin] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
 repass record [--data-dir <DIR>] delete <RECORD_ID>
 repass tag [--data-dir <DIR>] add --name <NAME>
 repass tag [--data-dir <DIR>] list
@@ -127,8 +127,15 @@ records.repass   # encrypted records and the next record ID
 tags.repass      # encrypted tag names and the next tag ID; optional
 ```
 
-Record changes atomically replace only `records.repass`; tag catalog changes
-atomically replace only `tags.repass`. There is no cross-file transaction.
+Record changes atomically replace `records.repass`; tag catalog changes
+atomically replace `tags.repass`. `metadata.repass` stores authenticated counts
+of records and persisted tag names. The data file is replaced before its count
+is updated, so the two-file operation is not a cross-file transaction. On open,
+counts are reconciled against readable data files. Only the current metadata and
+data-file format versions are accepted; older or unknown versions are rejected
+without migration. Current data-file headers authenticate the schema version,
+allowing an unsupported data schema to be reported distinctly from an
+authentication failure.
 Storage commands lazily request the master password and create a new vault when
 no vault files exist. `vault init` explicitly creates one and refuses to replace
 existing files. A partial initialization is reported as an error rather than

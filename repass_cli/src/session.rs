@@ -1,5 +1,7 @@
 use crate::{Result, output};
 use repass_storage::{Storage, TagCatalogStatus};
+#[cfg(test)]
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -44,6 +46,31 @@ pub struct Session {
     data_dir: PathBuf,
     storage: Option<Storage>,
     warnings_enabled: bool,
+    secret_input: Box<dyn SecretInput>,
+}
+
+trait SecretInput {
+    fn read_secret(&mut self) -> io::Result<String>;
+}
+
+struct TerminalSecretInput;
+
+impl SecretInput for TerminalSecretInput {
+    fn read_secret(&mut self) -> io::Result<String> {
+        rpassword::read_password()
+    }
+}
+
+#[cfg(test)]
+struct QueuedSecrets(VecDeque<String>);
+
+#[cfg(test)]
+impl SecretInput for QueuedSecrets {
+    fn read_secret(&mut self) -> io::Result<String> {
+        self.0
+            .pop_front()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "no test secret remains"))
+    }
 }
 
 impl Session {
@@ -52,6 +79,7 @@ impl Session {
             data_dir,
             storage: None,
             warnings_enabled: true,
+            secret_input: Box::new(TerminalSecretInput),
         }
     }
 
@@ -61,7 +89,25 @@ impl Session {
             data_dir,
             storage: Some(storage),
             warnings_enabled: true,
+            secret_input: Box::new(TerminalSecretInput),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_passwords(
+        data_dir: PathBuf,
+        passwords: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            data_dir,
+            storage: None,
+            warnings_enabled: true,
+            secret_input: Box::new(QueuedSecrets(passwords.into_iter().collect())),
+        }
+    }
+
+    pub(crate) fn read_secret(&mut self) -> io::Result<String> {
+        self.secret_input.read_secret()
     }
 
     pub fn data_dir(&self) -> &Path {
@@ -82,7 +128,9 @@ impl Session {
         interactive: bool,
     ) -> Result<&mut Storage> {
         if self.storage.is_none() {
-            let mut password = read_master_password(output_stream, interactive)?.into_bytes();
+            let mut password =
+                read_master_password(self.secret_input.as_mut(), output_stream, interactive)?
+                    .into_bytes();
             let result = Storage::open_or_create_in(&self.data_dir, &password);
             password.fill(0);
             let storage = result?;
@@ -104,7 +152,9 @@ impl Session {
         output_stream: &mut impl Write,
         interactive: bool,
     ) -> Result<()> {
-        let mut password = read_master_password(output_stream, interactive)?.into_bytes();
+        let mut password =
+            read_master_password(self.secret_input.as_mut(), output_stream, interactive)?
+                .into_bytes();
         let result = Storage::create_in(&self.data_dir, &password);
         password.fill(0);
         self.storage = Some(result?);
@@ -124,7 +174,11 @@ impl Session {
     }
 }
 
-fn read_master_password(output_stream: &mut impl Write, interactive: bool) -> Result<String> {
+fn read_master_password(
+    secret_input: &mut dyn SecretInput,
+    output_stream: &mut impl Write,
+    interactive: bool,
+) -> Result<String> {
     if interactive {
         output::styled(output_stream, output::PROMPT, "Master password: ")?;
         output_stream.flush()?;
@@ -132,7 +186,7 @@ fn read_master_password(output_stream: &mut impl Write, interactive: bool) -> Re
         write!(io::stderr(), "Master password: ")?;
         io::stderr().flush()?;
     }
-    Ok(rpassword::read_password()?)
+    Ok(secret_input.read_secret()?)
 }
 
 #[cfg(test)]

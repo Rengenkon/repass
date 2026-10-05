@@ -8,6 +8,7 @@ server functionality.
 
 The workspace currently contains:
 
+- `repass_cli` — command-line application composing the libraries.
 - `repass_generator` — password generation, dictionaries and separators.
 - `repass_storage` — records, tags and vault persistence.
 

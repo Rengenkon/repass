@@ -12,12 +12,14 @@ pub struct FixedCountSeparator<'a> {
 }
 
 impl<'a> FixedCountSeparator<'a> {
-    pub fn new(separator: &'a str, separator_count: usize) -> Self {
-        Self {
+    pub fn new(separator: &'a str, separator_count: usize) -> Result<Self, SeparatorError> {
+        let separator = Self {
             separator,
             separator_chars: separator.chars().count(),
             separator_count,
-        }
+        };
+        separator.validate()?;
+        Ok(separator)
     }
 }
 
@@ -122,7 +124,7 @@ mod tests {
 
     #[test]
     fn fixed_count_handles_unicode_and_multichar_separator() {
-        let separator = FixedCountSeparator::new("🟠-", 2);
+        let separator = FixedCountSeparator::new("🟠-", 2).unwrap();
         let parts = ["猫abcé"];
         let output = separator.separate(&parts).unwrap();
         assert_eq!(output, "猫🟠-ab🟠-cé");
@@ -134,16 +136,16 @@ mod tests {
 
     #[test]
     fn invalid_count_is_an_error() {
-        assert_eq!(
-            FixedCountSeparator::new("-", 0).validate(),
+        assert!(matches!(
+            FixedCountSeparator::new("-", 0),
             Err(SeparatorError::ZeroSeparatorCount)
-        );
+        ));
     }
 
     #[test]
     fn output_chars_matches_rendered_output_for_short_and_long_inputs() {
         for count in [1, 2, 4, 9] {
-            let separator = FixedCountSeparator::new("::", count);
+            let separator = FixedCountSeparator::new("::", count).unwrap();
             for input in ["a", "abc", "abcdef", "é🦀猫x"] {
                 let parts = [input];
                 assert_eq!(

@@ -15,7 +15,7 @@ use repass_generator::separator::between_parts::BetweenPartsSeparator;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dictionary = FileDictionary::from_entries(["river", "silver", "forest"])?;
     let dictionary = DictionaryCache::new(dictionary)?;
-    let separator = BetweenPartsSeparator::new("-");
+    let separator = BetweenPartsSeparator::new("-")?;
     let query = Query::new(
         PasswordLength::Range {
             min_chars: 12,
@@ -43,7 +43,7 @@ A `Dictionary` provides the non-empty strings that can be selected during genera
 - `PresetDictionary` — built-in character sets, such as digits, letters, punctuation, and symbols; custom entries can also be added.
 - `DictionaryCache` — a validated, indexed dictionary grouped by entry length. Build it after finishing dictionary changes; the cached dictionary should then remain unchanged.
 
-Empty dictionaries, empty entries, and duplicate entries added through the dictionary API are rejected.
+Empty dictionaries and empty entries are rejected. Duplicate values from file/entry constructors and custom additions are rejected; overlapping built-in preset selections are combined as a unique set. Every dictionary is validated again when building its cache.
 
 ### Query and length
 
@@ -56,6 +56,8 @@ Empty dictionaries, empty entries, and duplicate entries added through the dicti
 ### Separators
 
 The `Separator` trait defines how selected entries are joined and how output length is calculated.
+
+Custom implementations are supported. A strategy must provide a finite sequence of feasible shapes, and its `output_chars` and rendered `separate` output must agree in Unicode scalar count. The generator checks the rendered count and limits shape search. Built-in configurable separators validate their arguments in `new` and return `Result`.
 
 | Strategy | Behavior |
 | --- | --- |
@@ -71,6 +73,8 @@ Separators may contain multiple Unicode scalar values. The default separator for
 A `SeparationShape` describes the content length and number of dictionary entries that can fit a target output length under a separator strategy. The separator exposes possible shapes lazily. The internal combination planner then looks for dictionary entries whose lengths match a shape, and the separator renders the selected entries.
 
 This separation of responsibilities lets the generator account for separator characters when honoring an exact output length.
+
+For each request, the generator tries shapes in the order returned by the strategy and uses randomized choices among feasible entry lengths and entries for that shape. The result is not sampled uniformly from every possible password.
 
 ## Generating multiple passwords
 
