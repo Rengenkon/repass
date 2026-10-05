@@ -1,5 +1,7 @@
 mod commands;
+mod completions;
 mod interactive;
+mod output;
 mod session;
 
 use clap::{CommandFactory, Parser};
@@ -16,6 +18,9 @@ fn run() -> Result<()> {
         writeln!(io::stdout())?;
         return Ok(());
     };
+    if let Command::Completions { shell } = command {
+        return completions::generate(shell, &mut io::stdout().lock());
+    }
     if matches!(
         command,
         Command::Vault {
@@ -27,7 +32,7 @@ fn run() -> Result<()> {
     let mut session = session::Session::new(session::resolve_data_dir(cli.data_dir)?);
     let stdin = io::stdin();
     let mut input = stdin.lock();
-    let mut output = io::stdout().lock();
+    let mut output = anstream::AutoStream::auto(io::stdout().lock());
     match command {
         Command::Interactive => interactive::run(&mut session, &mut input, &mut output),
         command => commands::execute(command, &mut session, &mut input, &mut output, false),
@@ -38,7 +43,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("error: {error}");
+            let _ = output::error(&mut anstream::AutoStream::auto(io::stderr().lock()), error);
             ExitCode::FAILURE
         }
     }

@@ -6,7 +6,10 @@ fn cli() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_repass"));
     command
         .env("HOME", "/unused-home")
-        .env_remove("REPASS_DATA_DIR");
+        .env_remove("REPASS_DATA_DIR")
+        .env_remove("NO_COLOR")
+        .env_remove("CLICOLOR_FORCE")
+        .env_remove("CLICOLOR");
     command
 }
 
@@ -258,4 +261,157 @@ fn no_command_prints_help_without_starting_or_resolving_a_session() {
     assert!(text.contains("interactive"));
     assert!(!text.contains("repass>"));
     assert!(!text.contains("Interactive mode."));
+}
+
+#[test]
+fn shell_completion_scripts_include_commands_flags_and_separator_aliases() {
+    for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+        let output = cli()
+            .env_remove("HOME")
+            .env("REPASS_DATA_DIR", "")
+            .env("CLICOLOR_FORCE", "1")
+            .args(["completions", shell])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{shell}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
+        let script = String::from_utf8(output.stdout).unwrap();
+        assert!(!script.contains('\x1b'));
+        assert!(!script.contains("TODO:"));
+        for item in [
+            "repass",
+            "generate",
+            "record",
+            "separator-kind",
+            "dictionary",
+            "data-dir",
+            "between-parts",
+            "fixed-count",
+        ] {
+            assert!(script.contains(item), "missing {item} in {shell} script");
+        }
+        // Fish/zsh quote individual possible values; Bash uses a word list.
+        // Check every generator exposes all aliases, not just canonical names.
+        for number in ["1", "2", "3", "4"] {
+            assert!(
+                script
+                    .split(|ch: char| !ch.is_ascii_alphanumeric())
+                    .any(|word| word == number),
+                "missing alias {number} in {shell} script"
+            );
+        }
+        if shell == "bash" {
+            let mut child = Command::new("bash")
+                .arg("-n")
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(script.as_bytes())
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+        }
+    }
+    let output = cli().args(["completions", "unknown"]).output().unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn redirected_output_is_plain_and_no_color_disables_forced_color() {
+    for no_color in [false, true] {
+        let mut command = cli();
+        if no_color {
+            command.env("NO_COLOR", "1").env("CLICOLOR_FORCE", "1");
+        }
+        let output = command.arg("--help").output().unwrap();
+        assert!(output.status.success());
+        assert!(!output.stdout.contains(&0x1b));
+
+        let mut command = cli();
+        if no_color {
+            command.env("NO_COLOR", "1").env("CLICOLOR_FORCE", "1");
+        }
+        let output = command.args(["vault", "info"]).output().unwrap();
+        assert!(!output.status.success());
+        assert!(!output.stderr.contains(&0x1b));
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("TODO: repass_storage")
+        );
+
+        let mut command = cli();
+        if no_color {
+            command.env("NO_COLOR", "1").env("CLICOLOR_FORCE", "1");
+        }
+        let mut child = command
+            .arg("interactive")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"help\ngenerate\n7\n1\nrecord list\nq\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert!(!output.stdout.contains(&0x1b));
+    }
+}
+
+#[test]
+fn forced_color_styles_help_errors_and_session_but_not_generated_passwords() {
+    let output = cli()
+        .env("CLICOLOR_FORCE", "1")
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(output.stdout.contains(&0x1b));
+    let output = cli()
+        .env("CLICOLOR_FORCE", "1")
+        .args(["vault", "info"])
+        .output()
+        .unwrap();
+    assert!(output.stderr.contains(&0x1b));
+    let output = cli()
+        .env("CLICOLOR_FORCE", "1")
+        .args(["generate", "--length", "13", "--separator-kind", "none"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(!output.stdout.contains(&0x1b));
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim_end()
+            .chars()
+            .count(),
+        13
+    );
+    let mut child = cli()
+        .env("CLICOLOR_FORCE", "1")
+        .arg("interactive")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"help\ngenerate\n7\n1\nrecord list\nq\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.contains(&0x1b));
 }

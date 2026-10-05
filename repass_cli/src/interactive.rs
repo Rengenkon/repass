@@ -1,6 +1,7 @@
 use crate::{
     Result,
     commands::{self, Command},
+    output,
     session::Session,
 };
 use clap::{ArgAction, ArgMatches, CommandFactory, FromArgMatches, Parser, parser::ValueSource};
@@ -26,6 +27,7 @@ fn schema() -> clap::Command {
         .collect();
     let mut command = clap::Command::new("repass")
         .about("Session commands; use vault switch <DIR> to select a vault")
+        .styles(output::styles())
         .subcommand_required(true)
         .subcommands(subcommands)
         .mut_subcommand("vault", |vault| {
@@ -82,9 +84,14 @@ fn parse(words: Vec<String>, input: &mut impl BufRead, output: &mut impl Write) 
             None
         } else {
             if arg.name == "separator_kind" {
-                writeln!(output, "{}", commands::SEPARATOR_HELP)?;
+                output::styled(output, output::HEADING, commands::SEPARATOR_HELP)?;
+                writeln!(output)?;
             }
-            write!(output, "{}: ", arg.long.as_deref().unwrap_or(&arg.name))?;
+            output::styled(
+                output,
+                output::PROMPT,
+                format_args!("{}: ", arg.long.as_deref().unwrap_or(&arg.name)),
+            )?;
             output.flush()?;
             let mut value = String::new();
             if input.read_line(&mut value)? == 0 {
@@ -130,19 +137,17 @@ fn parse(words: Vec<String>, input: &mut impl BufRead, output: &mut impl Write) 
 }
 
 pub fn run(session: &mut Session, input: &mut impl BufRead, output: &mut impl Write) -> Result<()> {
-    writeln!(
-        output,
-        "Interactive mode. Use h or help for help; q or quit to leave."
-    )?;
+    output::styled(output, output::HEADING, "Interactive mode.")?;
+    writeln!(output, " Use h or help for help; q or quit to leave.")?;
     loop {
-        write!(output, "repass> ")?;
+        output::styled(output, output::PROMPT, "repass> ")?;
         output.flush()?;
         let mut line = String::new();
         if input.read_line(&mut line)? == 0 {
             break;
         }
         let Some(words) = shlex::split(&line) else {
-            writeln!(output, "error: unmatched quote or incomplete escape")?;
+            output::error(output, "unmatched quote or incomplete escape")?;
             continue;
         };
         if words.is_empty() {
@@ -154,19 +159,19 @@ pub fn run(session: &mut Session, input: &mut impl BufRead, output: &mut impl Wr
         match parse(words, input, output) {
             Ok(command) => {
                 if let Err(error) = commands::execute(command, session, input, output, true) {
-                    writeln!(output, "error: {error}")?;
+                    output::error(output, error)?;
                 }
             }
             Err(error) => {
                 if let Some(clap_error) = error.downcast_ref::<clap::Error>() {
-                    write!(output, "{clap_error}")?;
+                    write!(output, "{}", clap_error.render().ansi())?;
                 } else if error
                     .downcast_ref::<io::Error>()
                     .is_some_and(|error| error.kind() == io::ErrorKind::UnexpectedEof)
                 {
                     break;
                 } else {
-                    writeln!(output, "error: {error}")?;
+                    output::error(output, error)?;
                 }
             }
         }
@@ -187,7 +192,12 @@ mod tests {
             let mut session = Session::new("initial".into());
             let mut input = Cursor::new(format!("exit\n{quit}\nvault switch should-not-run\n"));
             let mut output = Vec::new();
-            run(&mut session, &mut input, &mut output).unwrap();
+            run(
+                &mut session,
+                &mut input,
+                &mut anstream::AutoStream::new(&mut output, anstream::ColorChoice::Never),
+            )
+            .unwrap();
             let text = String::from_utf8(output).unwrap();
             assert!(text.contains("unrecognized subcommand 'exit'"));
             assert!(!text.contains("should-not-run"));

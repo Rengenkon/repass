@@ -15,6 +15,7 @@ repass [--data-dir <DIR>] tag add --name <NAME>
 repass [--data-dir <DIR>] tag list
 repass [--data-dir <DIR>] tag delete <TAG_ID>
 repass [--data-dir <DIR>] interactive
+repass completions <SHELL>
 ```
 
 `--data-dir` is global and can also follow a subcommand. Directory precedence:
@@ -34,6 +35,44 @@ The `interactive` command is unavailable and absent from help inside a session.
 Inside a session, ordinary commands cannot accept `--data-dir`. Use
 `vault switch <DIR>` to close the old vault and change the session's directory.
 Opening and decryption are lazy; generation and help do not open a vault.
+
+## Colors
+
+Help headings, commands, arguments, interactive prompts, and status messages are
+colored in terminals. Errors use red, TODO messages yellow, and successful status
+messages green. Redirected output is plain text; setting `NO_COLOR=1` disables
+colors. Generated passwords and completion scripts have no added color codes.
+
+## Shell completion
+
+`repass completions <SHELL>` prints a static completion script for `bash`, `zsh`,
+`fish`, `powershell`, or `elvish`. It works without a vault or configured data
+directory. Completion includes commands, flags, separator strategy names and
+numbers, and file/directory hints where supported by the shell. This is completion
+for the outer shell, not Tab completion inside the `repass>` session.
+
+Examples (with `repass` installed in PATH):
+
+```bash
+# Bash: load for the current shell
+source <(repass completions bash)
+```
+
+```zsh
+# Zsh: initialize completion, then load for the current shell
+autoload -Uz compinit
+compinit
+source <(repass completions zsh)
+```
+
+```fish
+# Fish: load for the current shell
+repass completions fish | source
+```
+
+For persistent setup, save the generated script in your shell's completion
+directory or source it from its startup configuration. The CLI only writes the
+script to stdout; it does not install or modify shell configuration files.
 
 ## Separator strategies
 

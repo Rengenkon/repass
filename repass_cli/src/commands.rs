@@ -1,5 +1,5 @@
-use crate::{Result, session::Session};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use crate::{Result, output, session::Session};
+use clap::{Args, Parser, Subcommand, ValueEnum, ValueHint};
 use repass_generator::dictionary::{
     cache::DictionaryCache, file_dictionary::FileDictionary, presets,
 };
@@ -18,11 +18,12 @@ use std::path::PathBuf;
 #[command(
     name = "repass",
     version,
-    about = "Password generation and vault commands"
+    about = "Password generation and vault commands",
+    styles = output::styles()
 )]
 pub struct Cli {
     /// Data directory (overrides REPASS_DATA_DIR; default: $HOME/.repass)
-    #[arg(long, global = true)]
+    #[arg(long, global = true, value_hint = ValueHint::DirPath)]
     pub data_dir: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -49,6 +50,11 @@ pub enum Command {
     },
     /// Start a persistent interactive session
     Interactive,
+    /// Print a shell completion script to stdout
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Args)]
@@ -61,7 +67,7 @@ pub struct GenerateArgs {
     #[arg(long, default_value = "1", value_parser = positive_usize)]
     pub count: usize,
     /// UTF-8 dictionary, one entry per line; default: all built-in character sets
-    #[arg(long)]
+    #[arg(long, value_hint = ValueHint::FilePath)]
     pub dictionary: Option<PathBuf>,
     /// Separator text; default: "-"; not applicable to none
     #[arg(long, allow_hyphen_values = true, value_parser = nonempty_separator)]
@@ -131,7 +137,10 @@ pub enum VaultCommand {
     Info,
     /// Close the current vault and select another directory (interactive only)
     #[command(hide = true)]
-    Switch { dir: PathBuf },
+    Switch {
+        #[arg(value_hint = ValueHint::DirPath)]
+        dir: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -232,11 +241,13 @@ pub fn execute(
             }
             Ok(())
         }
+        Command::Completions { shell } => crate::completions::generate(shell, output),
         Command::Vault {
             command: VaultCommand::Switch { dir },
         } if interactive => {
             session.switch(dir)?;
-            writeln!(output, "Data directory: {}", session.data_dir().display())?;
+            output::styled(output, output::SUCCESS, "Data directory:")?;
+            writeln!(output, " {}", session.data_dir().display())?;
             Ok(())
         }
         Command::Vault {
@@ -258,7 +269,9 @@ pub fn execute(
                 // TODO: pass this secret to the storage mutation API once it exists.
                 // Keep it local; it must never be added to parsed arguments or command history.
                 let _password = if interactive {
-                    rpassword::prompt_password("Password: ")?
+                    output::styled(output, output::PROMPT, "Password: ")?;
+                    output.flush()?;
+                    rpassword::read_password()?
                 } else {
                     let mut password = String::new();
                     if input.read_line(&mut password)? == 0 {
