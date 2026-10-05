@@ -264,6 +264,20 @@ Storage commands lazily request the master password and create a new vault when
 no vault files exist. `vault init` explicitly creates one and refuses to replace
 existing files. A partial initialization is reported as an error rather than
 silently treated as an empty vault.
+Creating a vault, explicitly or on first use, requires a nonempty master
+password and hidden confirmation. A mismatch or interrupted confirmation does
+not create a vault. Opening an existing vault requests the password only once.
+On Unix, newly created vault directories (including newly created parent
+directories) use owner-only permissions, at most `0700`. Initializing in an
+existing directory removes group/other permissions from that directory while
+preserving stricter owner permissions; existing ancestors are not changed.
+New vault files, backups, temporary files and preserved damaged copies use at
+most `0600`. Atomic replacement also retains stricter owner permissions of an
+existing destination, such as `0400`, and removes group/other permissions.
+The process umask can restrict these permissions further. Existing vault
+directories and files are not automatically chmod'ed on open; file permissions
+are restricted when files are rewritten. This Unix mode policy does not set
+Windows ACLs.
 Surviving `.bak` files also prevent automatic initialization when the primary
 files are missing; use `vault recover` to restore them.
 
@@ -288,9 +302,11 @@ It refuses damaged count metadata and metadata with nonzero counts.
 This command is an explicit decision to create empty records: stale counts alone
 cannot prove that data files were never present.
 
-`record find` and `record list` support exact `--name` matching and multiple
-`--tag` IDs. Every requested tag must match. Results are ordered by stable record
-ID and do not reveal passwords.
+`record find` and `record list` support exact `--name` and `--host` matching and
+multiple `--tag` IDs. Every requested tag must match. Without `--query`, results
+are ordered by stable record ID. `record find --query <TEXT>` uses fuzzy matching
+and orders results by descending relevance, with record ID breaking ties.
+List/find output does not reveal secret values.
 
 The tag catalog is optional. If it is missing or unreadable, records remain
 available. Referenced IDs without a stored name are shown as temporary technical

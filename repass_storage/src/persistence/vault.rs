@@ -8,6 +8,8 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -46,6 +48,7 @@ pub(crate) fn fail_next_write(path: PathBuf, after_publication: bool) {
 
 #[derive(Debug)]
 pub enum VaultError {
+    EmptyMasterPassword,
     Io(std::io::Error),
     InvalidFormat(&'static str),
     UnsupportedVersion(u16),
@@ -59,6 +62,7 @@ pub enum VaultError {
 impl Display for VaultError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::EmptyMasterPassword => formatter.write_str("master password cannot be empty"),
             Self::WriteCommitted(error) => write!(
                 formatter,
                 "file was replaced, but directory synchronization failed: {error}"
@@ -134,6 +138,9 @@ pub struct Vault {
 impl Vault {
     /// Creates key metadata without overwriting an existing file.
     pub fn create(path: impl AsRef<Path>, master_password: &[u8]) -> Result<Self, VaultError> {
+        if master_password.is_empty() {
+            return Err(VaultError::EmptyMasterPassword);
+        }
         let mut salt = [0; SALT_LEN];
         let mut storage_id = [0; STORAGE_ID_LEN];
         rand::rng().fill(&mut salt);
@@ -390,6 +397,9 @@ impl Vault {
 
     /// Rewraps the existing data key; record and tag files retain their encoding.
     pub(crate) fn change_password(&mut self, password: &[u8]) -> Result<(), VaultError> {
+        if password.is_empty() {
+            return Err(VaultError::EmptyMasterPassword);
+        }
         let mut salt = [0; SALT_LEN];
         rand::rng().fill(&mut salt);
         let key = derive_wrapping_key(password, &salt, KDF_MEMORY_KIB, KDF_ITERATIONS, KDF_LANES)?;
@@ -694,10 +704,23 @@ fn write_new_atomically(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
 }
 
 fn create_temporary(path: &Path) -> Result<(PathBuf, File), VaultError> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        // New files are owner-only. Replacements also preserve stricter owner
+        // permissions, e.g. a file deliberately made read-only (0400).
+        let mode = match fs::metadata(path) {
+            Ok(metadata) => metadata.permissions().mode() & 0o600,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0o600,
+            Err(error) => return Err(error.into()),
+        };
+        options.mode(mode);
+    }
     for _ in 0..64 {
         let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let temp = path.with_extension(format!("tmp-{}-{counter}", std::process::id()));
-        match OpenOptions::new().write(true).create_new(true).open(&temp) {
+        match options.open(&temp) {
             Ok(file) => return Ok((temp, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.into()),
@@ -723,6 +746,61 @@ mod tests {
 
     fn test_directory(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("repass-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn empty_master_password_is_rejected_without_publishing_metadata() {
+        let directory = test_directory("empty-password");
+        let _ = fs::remove_dir_all(&directory);
+        let path = directory.join("metadata.repass");
+        assert!(matches!(
+            Vault::create(&path, b""),
+            Err(VaultError::EmptyMasterPassword)
+        ));
+        assert!(!directory.exists());
+        fs::create_dir(&directory).unwrap();
+        let mut vault = Vault::create(&path, b"master").unwrap();
+        let primary = fs::read(&path).unwrap();
+        let backup = fs::read(backup_path(&path)).unwrap();
+        assert!(matches!(
+            vault.change_password(b""),
+            Err(VaultError::EmptyMasterPassword)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), primary);
+        assert_eq!(fs::read(backup_path(&path)).unwrap(), backup);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_writes_restrict_access_and_preserve_stricter_owner_permissions() {
+        let directory = test_directory("file-modes");
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("records.repass");
+        let (temp, file) = create_temporary(&path).unwrap();
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        drop(file);
+        fs::remove_file(temp).unwrap();
+        write_new_atomically(&path, b"initial").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        write_atomically(&path, b"restricted").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        write_atomically(&path, b"read-only replacement").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o400
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"read-only replacement");
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

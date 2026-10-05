@@ -8,6 +8,8 @@ use frizbee::{CaseMatching, Config, Matcher, UnicodeMatching};
 use std::borrow::Cow;
 use std::fs::{self, File, TryLockError};
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const METADATA_FILE: &str = "metadata.repass";
@@ -60,8 +62,13 @@ impl Storage {
         directory: impl AsRef<Path>,
         master_password: &[u8],
     ) -> Result<Self, StorageError> {
+        if master_password.is_empty() {
+            return Err(StorageError::InvalidState(
+                "master password cannot be empty",
+            ));
+        }
         let directory = owned_directory(directory)?;
-        fs::create_dir_all(&directory)?;
+        create_private_directory(&directory)?;
         let lock = lock_directory(&directory)?;
         let metadata_exists = path_exists(&directory.join(METADATA_FILE))?;
         let records_exist = path_exists(&directory.join(RECORDS_FILE))?;
@@ -76,6 +83,11 @@ impl Storage {
             return Err(StorageError::IncompleteInitialization);
         }
         reject_legacy_file(&directory)?;
+
+        #[cfg(unix)]
+        lock.set_permissions(fs::Permissions::from_mode(
+            lock.metadata()?.permissions().mode() & 0o700,
+        ))?;
 
         let vault = Vault::create(directory.join(METADATA_FILE), master_password)?;
         let records = Records::new();
@@ -197,7 +209,14 @@ impl Storage {
         master_password: &[u8],
     ) -> Result<Self, StorageError> {
         let directory = owned_directory(directory)?;
-        fs::create_dir_all(&directory)?;
+        // An existing vault can still be opened with its original password.
+        // Empty passwords must never cause even an empty directory to be created.
+        if master_password.is_empty() && !path_exists(&directory.join(METADATA_FILE))? {
+            return Err(StorageError::InvalidState(
+                "master password cannot be empty",
+            ));
+        }
+        create_private_directory(&directory)?;
         if path_exists(&directory.join(METADATA_FILE))? {
             return Self::open_in(directory, master_password);
         }
@@ -604,6 +623,15 @@ fn owned_directory(directory: impl AsRef<Path>) -> Result<PathBuf, StorageError>
     Ok(directory.to_path_buf())
 }
 
+fn create_private_directory(directory: &Path) -> Result<(), StorageError> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder.create(directory)?;
+    Ok(())
+}
+
 fn records_path(directory: &Path) -> PathBuf {
     directory.join(RECORDS_FILE)
 }
@@ -710,6 +738,79 @@ mod tests {
             notes: None,
             tags,
         }
+    }
+
+    #[test]
+    fn empty_master_password_cannot_create_a_directory_or_vault() {
+        let directory = TestDirectory::new();
+        assert!(Storage::create_in(&directory.0, b"").is_err());
+        assert!(!directory.0.exists());
+        assert!(Storage::open_or_create_in(&directory.0, b"").is_err());
+        assert!(!directory.0.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_directories_and_all_published_files_have_private_permissions() {
+        let directory = TestDirectory::new();
+        fs::create_dir(&directory.0).unwrap();
+        fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o755)).unwrap();
+        let vault_dir = directory.0.join("new-parent/vault");
+        let mut storage = Storage::create_in(&vault_dir, b"master").unwrap();
+        assert_eq!(
+            fs::metadata(&directory.0).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        for path in [directory.0.join("new-parent"), vault_dir.clone()] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        let tag = storage.create_tag("work").unwrap();
+        storage.create_record(record("mail", vec![tag])).unwrap();
+        storage.rename_tag(tag, "renamed").unwrap();
+        storage.change_master_password(b"new").unwrap();
+        drop(storage);
+        fs::write(vault_dir.join(RECORDS_FILE), b"damaged").unwrap();
+        let storage = Storage::recover_in(&vault_dir, b"new").unwrap();
+        assert_eq!(storage.info().record_count, 0);
+        for entry in fs::read_dir(&vault_dir).unwrap() {
+            let entry = entry.unwrap();
+            assert_eq!(
+                entry.metadata().unwrap().permissions().mode() & 0o777,
+                0o600,
+                "{}",
+                entry.path().display()
+            );
+        }
+        assert!(fs::read_dir(&vault_dir).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".damaged-")
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn initializing_in_an_existing_directory_restricts_only_that_directory() {
+        let directory = TestDirectory::new();
+        fs::create_dir(&directory.0).unwrap();
+        fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o755)).unwrap();
+        let storage = Storage::create_in(&directory.0, b"master").unwrap();
+        assert_eq!(
+            fs::metadata(&directory.0).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        drop(storage);
+        fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o750)).unwrap();
+        assert!(Storage::create_in(&directory.0, b"replacement").is_err());
+        assert_eq!(
+            fs::metadata(&directory.0).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
     }
 
     #[test]
