@@ -1,16 +1,11 @@
 use crate::StorageError;
-use crate::persistence::{
-    PersistedRecord, PersistedRecords, PersistedTag, PersistedTags, Vault, VaultCounts,
-};
+use crate::persistence::vault::{backup_path, preserve_damaged};
+use crate::persistence::{PersistedRecords, PersistedTag, PersistedTags, Vault, VaultCounts};
 use crate::record::types::Timestamp;
-use crate::record::{NewRecord, Record, RecordId, RecordPatch, RecordView, Records};
+use crate::record::{NewRecord, RecordId, RecordPatch, RecordView, Records};
 use crate::tags::{Tag, TagId, Tags};
-use serde::Deserialize;
-use serde::de::{DeserializeSeed, SeqAccess, Visitor};
-use std::fmt::Formatter;
-use std::fs;
+use std::fs::{self, File, TryLockError};
 use std::io;
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 const METADATA_FILE: &str = "metadata.repass";
@@ -20,195 +15,6 @@ const LEGACY_FILE: &str = "vault.repass";
 const RECORDS_KIND: &str = "records";
 const TAGS_KIND: &str = "tags";
 const DATA_SCHEMA_VERSION: u16 = 1;
-
-struct VecSeed<S, T> {
-    capacity: usize,
-    seed: S,
-    marker: PhantomData<T>,
-}
-
-impl<'de, S, T> DeserializeSeed<'de> for VecSeed<S, T>
-where
-    S: DeserializeSeed<'de, Value = T> + Clone,
-{
-    type Value = Vec<T>;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_seq(VecVisitor::<S, T> {
-            capacity: self.capacity,
-            seed: self.seed,
-            marker: PhantomData,
-        })
-    }
-}
-
-struct VecVisitor<S, T> {
-    capacity: usize,
-    seed: S,
-    marker: PhantomData<T>,
-}
-
-impl<'de, S, T> Visitor<'de> for VecVisitor<S, T>
-where
-    S: DeserializeSeed<'de, Value = T> + Clone,
-{
-    type Value = Vec<T>;
-
-    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a sequence")
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let capacity = sequence.size_hint().unwrap_or(self.capacity);
-        let mut values = Vec::with_capacity(capacity);
-        while let Some(value) = sequence.next_element_seed(self.seed.clone())? {
-            values.push(value);
-        }
-        Ok(values)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct RecordSeed;
-
-impl<'de> DeserializeSeed<'de> for RecordSeed {
-    type Value = Record;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        PersistedRecord::deserialize(deserializer).map(Record::from)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct PersistedTagSeed;
-
-impl<'de> DeserializeSeed<'de> for PersistedTagSeed {
-    type Value = PersistedTag;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        PersistedTag::deserialize(deserializer)
-    }
-}
-
-struct LoadedRecords {
-    records: Vec<Record>,
-    next_record_id: Option<u64>,
-}
-
-struct PersistedRecordsSeed {
-    capacity: usize,
-}
-
-impl<'de> DeserializeSeed<'de> for PersistedRecordsSeed {
-    type Value = LoadedRecords;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_struct(
-            "PersistedRecords",
-            &["records", "next_record_id"],
-            PersistedRecordsVisitor {
-                capacity: self.capacity,
-            },
-        )
-    }
-}
-
-struct PersistedRecordsVisitor {
-    capacity: usize,
-}
-
-impl<'de> Visitor<'de> for PersistedRecordsVisitor {
-    type Value = LoadedRecords;
-
-    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("persisted records and the next record ID")
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let records = sequence
-            .next_element_seed(VecSeed::<RecordSeed, Record> {
-                capacity: self.capacity,
-                seed: RecordSeed,
-                marker: PhantomData,
-            })?
-            .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
-        let next_record_id = sequence
-            .next_element()?
-            .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
-        Ok(LoadedRecords {
-            records,
-            next_record_id,
-        })
-    }
-}
-
-struct PersistedTagsSeed {
-    capacity: usize,
-}
-
-impl<'de> DeserializeSeed<'de> for PersistedTagsSeed {
-    type Value = PersistedTags;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_struct(
-            "PersistedTags",
-            &["tags", "next_tag_id"],
-            PersistedTagsVisitor {
-                capacity: self.capacity,
-            },
-        )
-    }
-}
-
-struct PersistedTagsVisitor {
-    capacity: usize,
-}
-
-impl<'de> Visitor<'de> for PersistedTagsVisitor {
-    type Value = PersistedTags;
-
-    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("persisted tags and the next tag ID")
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let tags = sequence
-            .next_element_seed(VecSeed::<PersistedTagSeed, PersistedTag> {
-                capacity: self.capacity,
-                seed: PersistedTagSeed,
-                marker: PhantomData,
-            })?
-            .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
-        let next_tag_id = sequence
-            .next_element()?
-            .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
-        Ok(PersistedTags { tags, next_tag_id })
-    }
-}
 
 /// State of the optional tag-name file.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -226,17 +32,21 @@ pub struct StorageInfo {
     /// Includes temporary technical tags reconstructed from record references.
     pub tag_count: usize,
     pub tag_catalog: TagCatalogStatus,
+    /// Opening remains possible when auxiliary count repairs cannot be written.
+    pub metadata_warning: Option<String>,
 }
 
 /// Directory-level vault API. Record and tag data files are replaced atomically;
 /// metadata counts are updated afterward and reconciled from data files on open.
 /// The data file and metadata update are not a cross-file transaction.
 pub struct Storage {
+    _lock: File,
     directory: PathBuf,
     vault: Vault,
     records: Records,
     tags: Tags,
     tag_catalog_status: TagCatalogStatus,
+    metadata_warning: Option<String>,
 }
 
 impl Storage {
@@ -248,11 +58,15 @@ impl Storage {
     ) -> Result<Self, StorageError> {
         let directory = owned_directory(directory)?;
         fs::create_dir_all(&directory)?;
+        let lock = lock_directory(&directory)?;
         let metadata_exists = path_exists(&directory.join(METADATA_FILE))?;
         let records_exist = path_exists(&directory.join(RECORDS_FILE))?;
         let tags_exist = path_exists(&directory.join(TAGS_FILE))?;
         if metadata_exists && records_exist {
             return Err(StorageError::AlreadyInitialized);
+        }
+        if any_backup_exists(&directory)? {
+            return Err(StorageError::IncompleteInitialization);
         }
         if metadata_exists || records_exist || tags_exist {
             return Err(StorageError::IncompleteInitialization);
@@ -263,11 +77,13 @@ impl Storage {
         let records = Records::new();
         save_records(&vault, &directory, &records)?;
         Ok(Self {
+            _lock: lock,
             directory,
             vault,
             records,
             tags: Tags::default(),
             tag_catalog_status: TagCatalogStatus::Missing,
+            metadata_warning: None,
         })
     }
 
@@ -279,23 +95,26 @@ impl Storage {
         master_password: &[u8],
     ) -> Result<Self, StorageError> {
         let directory = owned_directory(directory)?;
+        let lock = lock_directory(&directory)?;
+        Self::open_locked(directory, master_password, lock)
+    }
+
+    fn open_locked(
+        directory: PathBuf,
+        master_password: &[u8],
+        lock: File,
+    ) -> Result<Self, StorageError> {
         let metadata_path = directory.join(METADATA_FILE);
         if !path_exists(&metadata_path)? {
             reject_legacy_file(&directory)?;
         }
         let mut vault = Vault::open(&metadata_path, master_password)?;
         let saved_counts = vault.counts();
-        let loaded_records: LoadedRecords = vault
-            .load_data_file_seed(
+        let loaded_records: PersistedRecords = vault
+            .load_data_file(
                 directory.join(RECORDS_FILE),
                 RECORDS_KIND,
                 DATA_SCHEMA_VERSION,
-                PersistedRecordsSeed {
-                    capacity: count_capacity(
-                        saved_counts.records,
-                        "record count exceeds platform capacity",
-                    )?,
-                },
             )
             .map_err(|error| match error {
                 crate::VaultError::Io(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -303,16 +122,14 @@ impl Storage {
                 }
                 error => StorageError::Vault(error),
             })?;
-        let records = Records::from_records(loaded_records.records, loaded_records.next_record_id)?;
+        let records =
+            Records::from_persisted(loaded_records.records, loaded_records.next_record_id)?;
         let used_tag_ids = records.used_tag_ids();
 
-        let (tags, tag_catalog_status) = match vault.load_data_file_seed(
+        let (tags, tag_catalog_status) = match vault.load_data_file::<PersistedTags>(
             directory.join(TAGS_FILE),
             TAGS_KIND,
             DATA_SCHEMA_VERSION,
-            PersistedTagsSeed {
-                capacity: count_capacity(saved_counts.tags, "tag count exceeds platform capacity")?,
-            },
         ) {
             Ok(persisted) => {
                 let stored = persisted
@@ -345,9 +162,7 @@ impl Storage {
         let tag_count = match &tag_catalog_status {
             TagCatalogStatus::Present => tags.iter().filter(|tag| !tag.is_technical()).count(),
             TagCatalogStatus::Missing => 0,
-            TagCatalogStatus::Unavailable(_) => {
-                count_capacity(saved_counts.tags, "tag count exceeds platform capacity")?
-            }
+            TagCatalogStatus::Unavailable(_) => usize::try_from(saved_counts.tags).unwrap_or(0),
         };
         let actual_counts = VaultCounts {
             records: u64::try_from(records.len())
@@ -355,18 +170,19 @@ impl Storage {
             tags: u64::try_from(tag_count)
                 .map_err(|_| StorageError::InvalidState("tag count exceeds metadata range"))?,
         };
-        if saved_counts != actual_counts {
-            vault
-                .save_counts(actual_counts)
-                .map_err(StorageError::Vault)?;
-        }
+        let metadata_warning = vault
+            .save_counts(actual_counts)
+            .err()
+            .map(|error| error.to_string());
 
         Ok(Self {
+            _lock: lock,
             directory,
             vault,
             records,
             tags,
             tag_catalog_status,
+            metadata_warning,
         })
     }
 
@@ -380,6 +196,9 @@ impl Storage {
         fs::create_dir_all(&directory)?;
         if path_exists(&directory.join(METADATA_FILE))? {
             return Self::open_in(directory, master_password);
+        }
+        if any_backup_exists(&directory)? {
+            return Err(StorageError::IncompleteInitialization);
         }
         reject_legacy_file(&directory)?;
         if path_exists(&directory.join(RECORDS_FILE))? || path_exists(&directory.join(TAGS_FILE))? {
@@ -410,23 +229,26 @@ impl Storage {
             record_count: self.records.len(),
             tag_count: self.tags.len(),
             tag_catalog: self.tag_catalog_status.clone(),
+            metadata_warning: self.metadata_warning.clone(),
         }
     }
 
     pub fn list_records(&self, tag: Option<TagId>) -> Result<Vec<RecordView<'_>>, StorageError> {
-        if let Some(tag) = tag {
-            if self.tags.get(tag).is_none() {
-                return Err(StorageError::TagNotFound(tag));
+        self.search_records(None, tag.as_slice())
+    }
+
+    /// Exact name matching, intersection of requested tags, ordered by stable ID.
+    pub fn search_records(
+        &self,
+        name: Option<&str>,
+        tags: &[TagId],
+    ) -> Result<Vec<RecordView<'_>>, StorageError> {
+        for tag in tags {
+            if self.tags.get(*tag).is_none() {
+                return Err(StorageError::TagNotFound(*tag));
             }
-            Ok(self
-                .records
-                .views()
-                .into_iter()
-                .filter(|record| record.tags.contains(&tag))
-                .collect())
-        } else {
-            Ok(self.records.views())
         }
+        Ok(self.records.filtered_views(name, tags))
     }
 
     pub fn get_record(&self, id: RecordId) -> Result<RecordView<'_>, StorageError> {
@@ -448,10 +270,14 @@ impl Storage {
                 return Err(StorageError::TagNotFound(*tag));
             }
         }
-        let mut records = self.records.clone();
-        let id = records.create(record, Timestamp::now()?)?;
-        save_records(&self.vault, &self.directory, &records)?;
-        self.records = records;
+        let next = self.records.next_id();
+        let id = self.records.create(record, Timestamp::now()?)?;
+        if let Err(error) = save_records(&self.vault, &self.directory, &self.records) {
+            if !write_committed(&error) {
+                self.records.rollback_create(id, next)?;
+            }
+            return Err(error);
+        }
         self.save_counts_after_data_write()?;
         Ok(id)
     }
@@ -466,21 +292,28 @@ impl Storage {
                 return Err(StorageError::TagNotFound(*tag));
             }
         }
-        let mut records = self.records.clone();
-        let changed = records.update(id, &patch, Timestamp::now()?)?;
+        let original = self.records.snapshot(id)?;
+        let changed = self.records.update(id, &patch, Timestamp::now()?)?;
         if changed {
-            save_records(&self.vault, &self.directory, &records)?;
-            self.records = records;
+            if let Err(error) = save_records(&self.vault, &self.directory, &self.records) {
+                if !write_committed(&error) {
+                    self.records.restore(original);
+                }
+                return Err(error);
+            }
             self.save_counts_after_data_write()?;
         }
         Ok(changed)
     }
 
     pub fn delete_record(&mut self, id: RecordId) -> Result<(), StorageError> {
-        let mut records = self.records.clone();
-        records.remove(id)?;
-        save_records(&self.vault, &self.directory, &records)?;
-        self.records = records;
+        let original = self.records.take(id)?;
+        if let Err(error) = save_records(&self.vault, &self.directory, &self.records) {
+            if !write_committed(&error) {
+                self.records.restore(original);
+            }
+            return Err(error);
+        }
         self.save_counts_after_data_write()?;
         Ok(())
     }
@@ -489,15 +322,101 @@ impl Storage {
         self.ensure_tag_catalog_writable()?;
         let mut tags = self.tags.clone();
         let id = tags.create(name)?;
-        self.save_tags(&tags)?;
-        self.tags = tags;
-        self.tag_catalog_status = TagCatalogStatus::Present;
+        self.commit_tags(tags)?;
         self.save_counts_after_data_write()?;
         Ok(id)
     }
 
     pub fn list_tags(&self) -> Vec<Tag> {
         self.tags.iter().cloned().collect()
+    }
+
+    pub fn get_tag(&self, id: TagId) -> Option<&Tag> {
+        self.tags.get(id)
+    }
+
+    pub fn change_master_password(&mut self, password: &[u8]) -> Result<(), StorageError> {
+        if password.is_empty() {
+            return Err(StorageError::InvalidState(
+                "new master password cannot be empty",
+            ));
+        }
+        self.vault.change_password(password)?;
+        Ok(())
+    }
+
+    /// Restores only authenticated, domain-validated backups. Damaged originals
+    /// are retained beside the files under unique `.damaged-*` names.
+    pub fn recover_in(directory: impl AsRef<Path>, password: &[u8]) -> Result<Self, StorageError> {
+        let directory = owned_directory(directory)?;
+        let lock = lock_directory(&directory)?;
+        let metadata = directory.join(METADATA_FILE);
+        let (vault, restore_metadata) = match Vault::open(&metadata, password) {
+            Ok(vault) => (vault, false),
+            Err(primary_error) => {
+                let backup = backup_path(&metadata);
+                let vault = Vault::open(&backup, password)
+                    .map_err(|_| StorageError::Vault(primary_error))?;
+                (vault, true)
+            }
+        };
+        let records = directory.join(RECORDS_FILE);
+        let (loaded, restore_records) = match validate_records_file(&vault, &records) {
+            Ok(records) => (records, false),
+            Err(_) => (validate_records_file(&vault, &backup_path(&records))?, true),
+        };
+        let tags = directory.join(TAGS_FILE);
+        let used = loaded.used_tag_ids();
+        let restore_tags =
+            validate_tags_file(&vault, &tags, &used).is_err() && backup_path(&tags).try_exists()?;
+        if restore_tags {
+            validate_tags_file(&vault, &backup_path(&tags), &used)?;
+        }
+        // Validate the entire recovery plan before replacing any primary file.
+        if restore_records {
+            vault.restore_data_file(&records, RECORDS_KIND, DATA_SCHEMA_VERSION)?;
+        }
+        if restore_tags {
+            vault.restore_data_file(&tags, TAGS_KIND, DATA_SCHEMA_VERSION)?;
+        }
+        if restore_metadata {
+            preserve_damaged(&metadata)?;
+            let bytes = fs::read(backup_path(&metadata))?;
+            crate::persistence::vault::write_recovered(&metadata, &bytes)?;
+        }
+        Self::open_locked(directory, password, lock)
+    }
+
+    /// Explicitly completes initialization only when no data or data backup
+    /// exists and authenticated metadata says that the vault is empty.
+    pub fn finish_initialization_in(
+        directory: impl AsRef<Path>,
+        password: &[u8],
+    ) -> Result<Self, StorageError> {
+        let directory = owned_directory(directory)?;
+        let lock = lock_directory(&directory)?;
+        let vault = Vault::open(directory.join(METADATA_FILE), password)?;
+        for name in [RECORDS_FILE, TAGS_FILE] {
+            let path = directory.join(name);
+            if path_exists(&path)? || path_exists(&backup_path(&path))? {
+                return Err(StorageError::InvalidState(
+                    "data files exist; use vault recover",
+                ));
+            }
+        }
+        if !vault.counts_valid()
+            || vault.counts()
+                != (VaultCounts {
+                    records: 0,
+                    tags: 0,
+                })
+        {
+            return Err(StorageError::InvalidState(
+                "cannot establish that initialization was empty",
+            ));
+        }
+        save_records(&vault, &directory, &Records::new())?;
+        Self::open_locked(directory, password, lock)
     }
 
     pub fn rename_tag(
@@ -508,9 +427,7 @@ impl Storage {
         self.ensure_tag_catalog_writable()?;
         let mut tags = self.tags.clone();
         tags.rename(id, new_name)?;
-        self.save_tags(&tags)?;
-        self.tags = tags;
-        self.tag_catalog_status = TagCatalogStatus::Present;
+        self.commit_tags(tags)?;
         self.save_counts_after_data_write()?;
         Ok(())
     }
@@ -529,9 +446,7 @@ impl Storage {
             return Ok(());
         }
         self.ensure_tag_catalog_writable()?;
-        self.save_tags(&tags)?;
-        self.tags = tags;
-        self.tag_catalog_status = TagCatalogStatus::Present;
+        self.commit_tags(tags)?;
         self.save_counts_after_data_write()?;
         Ok(())
     }
@@ -542,9 +457,7 @@ impl Storage {
         let mut tags = self.tags.clone();
         tags.promote_technical();
         let recovered = tags.len();
-        self.save_tags(&tags)?;
-        self.tags = tags;
-        self.tag_catalog_status = TagCatalogStatus::Present;
+        self.commit_tags(tags)?;
         self.save_counts_after_data_write()?;
         Ok(recovered)
     }
@@ -576,10 +489,19 @@ impl Storage {
         Ok(())
     }
 
+    fn commit_tags(&mut self, tags: Tags) -> Result<(), StorageError> {
+        let result = self.save_tags(&tags);
+        if result.is_ok() || result.as_ref().is_err_and(|error| write_committed(error)) {
+            self.tags = tags;
+            self.tag_catalog_status = TagCatalogStatus::Present;
+        }
+        result
+    }
+
     fn save_counts_after_data_write(&mut self) -> Result<(), StorageError> {
-        self.vault
-            .save_counts(self.current_counts()?)
-            .map_err(StorageError::MetadataCountsUpdateAfterDataSave)
+        let result = self.vault.save_counts(self.current_counts()?);
+        self.metadata_warning = result.as_ref().err().map(ToString::to_string);
+        result.map_err(StorageError::MetadataCountsUpdateAfterDataSave)
     }
 
     fn current_counts(&self) -> Result<VaultCounts, StorageError> {
@@ -600,24 +522,58 @@ fn owned_directory(directory: impl AsRef<Path>) -> Result<PathBuf, StorageError>
     Ok(directory.to_path_buf())
 }
 
-fn count_capacity(count: u64, error: &'static str) -> Result<usize, StorageError> {
-    usize::try_from(count).map_err(|_| StorageError::InvalidState(error))
-}
-
 fn records_path(directory: &Path) -> PathBuf {
     directory.join(RECORDS_FILE)
 }
 
+fn any_backup_exists(directory: &Path) -> Result<bool, StorageError> {
+    for name in [METADATA_FILE, RECORDS_FILE, TAGS_FILE] {
+        if path_exists(&backup_path(&directory.join(name)))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn save_records(vault: &Vault, directory: &Path, records: &Records) -> Result<(), StorageError> {
-    let persisted = PersistedRecords {
-        records: records.persisted(),
-        next_record_id: records.next_id(),
-    };
+    let persisted = records.persisted_view();
     vault.save_data_file(
         records_path(directory),
         RECORDS_KIND,
         DATA_SCHEMA_VERSION,
         &persisted,
+    )?;
+    Ok(())
+}
+
+fn lock_directory(directory: &Path) -> Result<File, StorageError> {
+    let lock = File::open(directory)?;
+    match lock.try_lock() {
+        Ok(()) => Ok(lock),
+        Err(TryLockError::WouldBlock) => Err(StorageError::Locked),
+        Err(TryLockError::Error(error)) => Err(error.into()),
+    }
+}
+
+fn write_committed(error: &StorageError) -> bool {
+    matches!(
+        error,
+        StorageError::Vault(crate::VaultError::WriteCommitted(_))
+    )
+}
+
+fn validate_records_file(vault: &Vault, path: &Path) -> Result<Records, StorageError> {
+    let persisted: PersistedRecords =
+        vault.load_data_file(path, RECORDS_KIND, DATA_SCHEMA_VERSION)?;
+    Records::from_persisted(persisted.records, persisted.next_record_id)
+}
+
+fn validate_tags_file(vault: &Vault, path: &Path, used: &[TagId]) -> Result<(), StorageError> {
+    let persisted: PersistedTags = vault.load_data_file(path, TAGS_KIND, DATA_SCHEMA_VERSION)?;
+    Tags::from_catalog(
+        persisted.tags.into_iter().map(|tag| (tag.id, tag.name)),
+        used.iter().copied(),
+        persisted.next_tag_id,
     )?;
     Ok(())
 }
@@ -640,6 +596,7 @@ fn reject_legacy_file(directory: &Path) -> Result<(), StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persistence::PersistedRecord;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -766,6 +723,7 @@ mod tests {
             records_before_tag_rename
         );
 
+        drop(storage);
         let reopened = Storage::open_in(&directory.0, b"master").unwrap();
         assert_eq!(reopened.list_tags()[0].name(), "work-renamed");
         let records = reopened.list_records(Some(tag)).unwrap();
@@ -785,7 +743,7 @@ mod tests {
         let tag = storage.create_tag("work").unwrap();
         storage.create_record(record("mail", vec![tag])).unwrap();
         fs::remove_file(directory.0.join(TAGS_FILE)).unwrap();
-
+        drop(storage);
         let mut reopened = Storage::open_in(&directory.0, b"master").unwrap();
         assert_eq!(reopened.tag_catalog_status(), &TagCatalogStatus::Missing);
         let technical = reopened.list_tags();
@@ -795,6 +753,7 @@ mod tests {
         assert!(technical[0].is_technical());
 
         reopened.rename_tag(tag, "renamed").unwrap();
+        drop(reopened);
         let reopened = Storage::open_in(&directory.0, b"master").unwrap();
         assert_eq!(reopened.list_tags()[0].name(), "renamed");
         assert!(!reopened.list_tags()[0].is_technical());
@@ -807,7 +766,7 @@ mod tests {
         let tag = storage.create_tag("work").unwrap();
         let record_id = storage.create_record(record("mail", vec![tag])).unwrap();
         fs::write(directory.0.join(TAGS_FILE), b"damaged").unwrap();
-
+        drop(storage);
         let mut reopened = Storage::open_in(&directory.0, b"master").unwrap();
         assert!(matches!(
             reopened.tag_catalog_status(),
@@ -816,7 +775,7 @@ mod tests {
         assert_eq!(reopened.get_record(record_id).unwrap().name, "mail");
         assert!(reopened.rename_tag(tag, "renamed").is_err());
         assert_eq!(reopened.recover_tags().unwrap(), 1);
-
+        drop(reopened);
         let reopened = Storage::open_in(&directory.0, b"master").unwrap();
         assert_eq!(reopened.list_tags()[0].name(), format!("#tag-{tag}"));
         assert!(!reopened.list_tags()[0].is_technical());
@@ -828,7 +787,7 @@ mod tests {
         let storage = Storage::create_in(&directory.0, b"master").unwrap();
         let technical_id = TagId::new(12);
 
-        let persisted = PersistedRecords {
+        let persisted: PersistedRecords = PersistedRecords {
             records: vec![PersistedRecord {
                 id: RecordId::new(1),
                 name: "legacy reference".into(),
@@ -851,6 +810,7 @@ mod tests {
                 &persisted,
             )
             .unwrap();
+        drop(storage);
         let mut reopened = Storage::open_in(&directory.0, b"master").unwrap();
         assert_eq!(reopened.create_tag("new").unwrap(), TagId::new(13));
     }
@@ -863,6 +823,7 @@ mod tests {
         storage.create_record(record("mail", vec![tag])).unwrap();
         assert!(Storage::create_in(&directory.0, b"replacement").is_err());
         assert!(matches!(storage.delete_tag(tag), Err(StorageError::TagInUse(id)) if id == tag));
+        drop(storage);
         assert_eq!(
             Storage::open_in(&directory.0, b"master")
                 .unwrap()
@@ -890,11 +851,11 @@ mod tests {
         let directory = TestDirectory::new();
         let storage = Storage::create_in(&directory.0, b"master").unwrap();
         fs::remove_file(directory.0.join(RECORDS_FILE)).unwrap();
+        drop(storage);
         assert!(matches!(
             Storage::open_or_create_in(&directory.0, b"master"),
             Err(StorageError::IncompleteInitialization)
         ));
-        drop(storage);
     }
 
     #[test]
@@ -932,5 +893,292 @@ mod tests {
             )
             .unwrap();
         assert_eq!(persisted.records.len(), 1);
+    }
+
+    #[test]
+    fn exclusive_session_lock_prevents_lost_updates_and_releases_on_drop() {
+        let directory = TestDirectory::new();
+        let mut first = Storage::create_in(&directory.0, b"master").unwrap();
+        assert!(matches!(
+            Storage::open_in(&directory.0, b"master"),
+            Err(StorageError::Locked)
+        ));
+        assert!(matches!(
+            Storage::open_or_create_in(&directory.0, b"master"),
+            Err(StorageError::Locked)
+        ));
+        first.create_record(record("first", vec![])).unwrap();
+        drop(first);
+        let mut second = Storage::open_in(&directory.0, b"master").unwrap();
+        second.create_record(record("second", vec![])).unwrap();
+        assert_eq!(second.list_records(None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn corrupted_or_extreme_auxiliary_counts_do_not_block_records() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let id = storage.create_record(record("kept", vec![])).unwrap();
+        storage
+            .vault
+            .save_counts(VaultCounts {
+                records: u64::MAX,
+                tags: u64::MAX,
+            })
+            .unwrap();
+        drop(storage);
+        let storage = Storage::open_in(&directory.0, b"master").unwrap();
+        assert_eq!(storage.get_record(id).unwrap().name, "kept");
+        drop(storage);
+        let metadata = directory.0.join(METADATA_FILE);
+        let mut bytes = fs::read(&metadata).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(&metadata, bytes).unwrap();
+        let storage = Storage::open_in(&directory.0, b"master").unwrap();
+        assert_eq!(storage.get_record(id).unwrap().name, "kept");
+        assert!(storage.vault.counts_valid());
+    }
+
+    #[test]
+    fn updates_without_count_changes_leave_metadata_bytes_unchanged() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let tag = storage.create_tag("work").unwrap();
+        let id = storage.create_record(record("mail", vec![tag])).unwrap();
+        let before = fs::read(directory.0.join(METADATA_FILE)).unwrap();
+        storage
+            .update_record(
+                id,
+                RecordPatch {
+                    name: Some("renamed".into()),
+                    ..RecordPatch::default()
+                },
+            )
+            .unwrap();
+        storage.rename_tag(tag, "renamed-tag").unwrap();
+        assert_eq!(fs::read(directory.0.join(METADATA_FILE)).unwrap(), before);
+    }
+
+    #[test]
+    fn backup_failure_rolls_back_create_update_and_delete() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let id = storage.create_record(record("original", vec![])).unwrap();
+        let path = directory.0.join(RECORDS_FILE);
+        let before = fs::read(&path).unwrap();
+        let backup = backup_path(&path);
+        fs::remove_file(&backup).unwrap();
+        fs::create_dir(&backup).unwrap();
+        assert!(storage.create_record(record("failed", vec![])).is_err());
+        assert!(
+            storage
+                .update_record(
+                    id,
+                    RecordPatch {
+                        name: Some("failed".into()),
+                        ..RecordPatch::default()
+                    }
+                )
+                .is_err()
+        );
+        assert!(storage.delete_record(id).is_err());
+        assert_eq!(storage.get_record(id).unwrap().name, "original");
+        assert_eq!(storage.info().record_count, 1);
+        assert_eq!(fs::read(path).unwrap(), before);
+        fs::remove_dir(backup).unwrap();
+        assert_eq!(
+            storage.create_record(record("next", vec![])).unwrap(),
+            RecordId::new(2)
+        );
+    }
+
+    #[test]
+    fn master_password_change_rewraps_primary_and_backup_without_rewriting_data() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"old").unwrap();
+        storage.create_record(record("mail", vec![])).unwrap();
+        let before = fs::read(directory.0.join(RECORDS_FILE)).unwrap();
+        storage.change_master_password(b"new").unwrap();
+        assert_eq!(fs::read(directory.0.join(RECORDS_FILE)).unwrap(), before);
+        let metadata_backup = backup_path(&directory.0.join(METADATA_FILE));
+        assert!(Vault::open(&metadata_backup, b"old").is_err());
+        assert!(Vault::open(&metadata_backup, b"new").is_ok());
+        storage
+            .create_record(record("after-change", vec![]))
+            .unwrap();
+        drop(storage);
+        assert!(Storage::open_in(&directory.0, b"old").is_err());
+        let reopened = Storage::open_in(&directory.0, b"new").unwrap();
+        assert_eq!(reopened.info().record_count, 2);
+    }
+
+    #[test]
+    fn recovery_restores_validated_backups_and_preserves_damaged_originals() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let tag = storage.create_tag("work").unwrap();
+        storage.rename_tag(tag, "renamed").unwrap();
+        let id = storage.create_record(record("kept", vec![tag])).unwrap();
+        storage.create_record(record("latest", vec![])).unwrap();
+        drop(storage);
+        for name in [METADATA_FILE, RECORDS_FILE, TAGS_FILE] {
+            fs::write(directory.0.join(name), b"damaged").unwrap();
+        }
+        let storage = Storage::recover_in(&directory.0, b"master").unwrap();
+        assert_eq!(storage.get_record(id).unwrap().name, "kept");
+        assert_eq!(storage.info().record_count, 1);
+        assert_eq!(storage.get_tag(tag).unwrap().name(), "work");
+        let damaged: Vec<_> = fs::read_dir(&directory.0)
+            .unwrap()
+            .filter_map(|entry| {
+                let path = entry.unwrap().path();
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".damaged-")
+                    .then_some(path)
+            })
+            .collect();
+        assert_eq!(damaged.len(), 3);
+        for path in damaged {
+            assert_eq!(fs::read(path).unwrap(), b"damaged");
+        }
+    }
+
+    #[test]
+    fn invalid_recovery_plan_never_replaces_primary_files() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        storage.create_tag("work").unwrap();
+        storage.create_record(record("kept", vec![])).unwrap();
+        storage.create_record(record("latest", vec![])).unwrap();
+        drop(storage);
+        fs::write(directory.0.join(RECORDS_FILE), b"damaged-records").unwrap();
+        fs::write(directory.0.join(TAGS_FILE), b"damaged-tags").unwrap();
+        fs::write(backup_path(&directory.0.join(TAGS_FILE)), b"bad-backup").unwrap();
+        assert!(Storage::recover_in(&directory.0, b"master").is_err());
+        assert_eq!(
+            fs::read(directory.0.join(RECORDS_FILE)).unwrap(),
+            b"damaged-records"
+        );
+        assert_eq!(
+            fs::read(directory.0.join(TAGS_FILE)).unwrap(),
+            b"damaged-tags"
+        );
+    }
+
+    #[test]
+    fn surviving_backups_are_never_overwritten_by_automatic_initialization() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        storage.create_record(record("kept", vec![])).unwrap();
+        storage.create_record(record("latest", vec![])).unwrap();
+        drop(storage);
+        let backup = backup_path(&directory.0.join(METADATA_FILE));
+        let before = fs::read(&backup).unwrap();
+        for name in [METADATA_FILE, RECORDS_FILE] {
+            fs::remove_file(directory.0.join(name)).unwrap();
+        }
+        assert!(matches!(
+            Storage::open_or_create_in(&directory.0, b"replacement"),
+            Err(StorageError::IncompleteInitialization)
+        ));
+        assert!(matches!(
+            Storage::create_in(&directory.0, b"replacement"),
+            Err(StorageError::IncompleteInitialization)
+        ));
+        assert_eq!(fs::read(backup).unwrap(), before);
+        let recovered = Storage::recover_in(&directory.0, b"master").unwrap();
+        assert_eq!(recovered.list_records(None).unwrap()[0].name, "kept");
+    }
+
+    #[test]
+    fn count_repair_write_failure_does_not_prevent_opening_and_later_repairs() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        storage.create_record(record("kept", vec![])).unwrap();
+        storage
+            .vault
+            .save_counts(VaultCounts {
+                records: 90,
+                tags: 0,
+            })
+            .unwrap();
+        drop(storage);
+        crate::persistence::vault::fail_next_write(directory.0.join(METADATA_FILE), false);
+        let mut storage = Storage::open_in(&directory.0, b"master").unwrap();
+        assert_eq!(storage.info().record_count, 1);
+        assert!(storage.info().metadata_warning.is_some());
+        storage.create_record(record("next", vec![])).unwrap();
+        assert!(storage.info().metadata_warning.is_none());
+        assert_eq!(storage.vault.counts().records, 2);
+    }
+
+    #[test]
+    fn post_publication_failure_keeps_memory_aligned_with_saved_records() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        crate::persistence::vault::fail_next_write(directory.0.join(RECORDS_FILE), true);
+        assert!(matches!(
+            storage.create_record(record("saved", vec![])),
+            Err(StorageError::Vault(crate::VaultError::WriteCommitted(_)))
+        ));
+        assert_eq!(storage.get_record(RecordId::new(1)).unwrap().name, "saved");
+        storage.create_record(record("next", vec![])).unwrap();
+        drop(storage);
+        assert_eq!(
+            Storage::open_in(&directory.0, b"master")
+                .unwrap()
+                .info()
+                .record_count,
+            2
+        );
+    }
+
+    #[test]
+    fn failed_primary_password_change_can_be_completed_from_new_backup() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"old").unwrap();
+        storage.create_record(record("kept", vec![])).unwrap();
+        crate::persistence::vault::fail_next_write(directory.0.join(METADATA_FILE), false);
+        assert!(storage.change_master_password(b"new").is_err());
+        assert!(Vault::open(directory.0.join(METADATA_FILE), b"old").is_ok());
+        drop(storage);
+        let storage = Storage::recover_in(&directory.0, b"new").unwrap();
+        assert_eq!(storage.get_record(RecordId::new(1)).unwrap().name, "kept");
+        drop(storage);
+        assert!(Storage::open_in(&directory.0, b"new").is_ok());
+    }
+
+    #[test]
+    fn finish_initialization_requires_authenticated_empty_metadata_and_no_data() {
+        let directory = TestDirectory::new();
+        fs::create_dir_all(&directory.0).unwrap();
+        Vault::create(directory.0.join(METADATA_FILE), b"master").unwrap();
+        assert!(Storage::finish_initialization_in(&directory.0, b"wrong").is_err());
+        let storage = Storage::finish_initialization_in(&directory.0, b"master").unwrap();
+        assert_eq!(storage.info().record_count, 0);
+        drop(storage);
+        assert!(Storage::finish_initialization_in(&directory.0, b"master").is_err());
+    }
+
+    #[test]
+    fn record_search_intersects_name_and_multiple_tags() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let a = storage.create_tag("a").unwrap();
+        let b = storage.create_tag("b").unwrap();
+        let wanted = storage.create_record(record("mail", vec![a, b])).unwrap();
+        storage.create_record(record("mail", vec![a])).unwrap();
+        storage.create_record(record("other", vec![a, b])).unwrap();
+        let results = storage.search_records(Some("mail"), &[a, b]).unwrap();
+        assert_eq!(
+            results.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![wanted]
+        );
+        assert!(matches!(
+            storage.search_records(None, &[TagId::MAX]),
+            Err(StorageError::TagNotFound(_))
+        ));
     }
 }

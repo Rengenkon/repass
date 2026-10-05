@@ -1,9 +1,9 @@
 use crate::StorageError;
-use crate::persistence::PersistedRecord;
+use crate::persistence::{PersistedRecord, PersistedRecordRef, PersistedRecordsRef};
 use crate::record::types::Timestamp;
 use crate::tags::TagId;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
@@ -45,7 +45,7 @@ pub(crate) struct Records {
     next_id: Option<u64>,
 }
 
-/// A borrowed view of one SoA row. Password access is explicit so callers can
+/// A borrowed view of one record. Password access is explicit so callers can
 /// avoid including it in list output by default.
 #[derive(Clone, Eq, PartialEq)]
 pub struct RecordView<'a> {
@@ -113,7 +113,6 @@ impl Records {
         Self::default()
     }
 
-    #[cfg(test)]
     pub(crate) fn from_persisted(
         records: Vec<PersistedRecord>,
         next_id: Option<u64>,
@@ -158,8 +157,15 @@ impl Records {
             .map(|position| self.view_at(position))
     }
 
-    pub fn views(&self) -> Vec<RecordView<'_>> {
-        let mut records: Vec<_> = self.rows.iter().collect();
+    pub(crate) fn filtered_views(&self, name: Option<&str>, tags: &[TagId]) -> Vec<RecordView<'_>> {
+        let mut records: Vec<_> = self
+            .rows
+            .iter()
+            .filter(|record| {
+                name.is_none_or(|name| record.name == name)
+                    && tags.iter().all(|tag| record.tags.contains(tag))
+            })
+            .collect();
         records.sort_unstable_by_key(|record| record.id);
         records.into_iter().map(Self::view_of).collect()
     }
@@ -217,14 +223,45 @@ impl Records {
     }
 
     pub(crate) fn remove(&mut self, id: RecordId) -> Result<(), StorageError> {
+        self.take(id).map(|_| ())
+    }
+
+    pub(crate) fn take(&mut self, id: RecordId) -> Result<Record, StorageError> {
         let position = self
             .positions
             .remove(&id)
             .ok_or(StorageError::RecordNotFound(id))?;
-        self.rows.swap_remove(position);
+        let removed = self.rows.swap_remove(position);
         if let Some(moved_record) = self.rows.get(position) {
             self.positions.insert(moved_record.id, position);
         }
+        Ok(removed)
+    }
+
+    pub(crate) fn snapshot(&self, id: RecordId) -> Result<Record, StorageError> {
+        let position = self
+            .positions
+            .get(&id)
+            .ok_or(StorageError::RecordNotFound(id))?;
+        Ok(self.rows[*position].clone())
+    }
+
+    pub(crate) fn restore(&mut self, record: Record) {
+        if let Some(position) = self.positions.get(&record.id).copied() {
+            self.rows[position] = record;
+        } else {
+            self.positions.insert(record.id, self.rows.len());
+            self.rows.push(record);
+        }
+    }
+
+    pub(crate) fn rollback_create(
+        &mut self,
+        id: RecordId,
+        next: Option<u64>,
+    ) -> Result<(), StorageError> {
+        self.remove(id)?;
+        self.next_id = next;
         Ok(())
     }
 
@@ -286,8 +323,30 @@ impl Records {
         self.rows.iter().any(|record| record.tags.contains(&tag))
     }
 
+    #[cfg(test)]
     pub(crate) fn persisted(&self) -> Vec<PersistedRecord> {
         self.rows.iter().map(PersistedRecord::from).collect()
+    }
+
+    pub(crate) fn persisted_view(&self) -> PersistedRecordsRef<'_> {
+        PersistedRecordsRef {
+            records: self
+                .rows
+                .iter()
+                .map(|record| PersistedRecordRef {
+                    id: record.id,
+                    name: &record.name,
+                    password: &record.password,
+                    username: record.username.as_deref(),
+                    url: record.url.as_deref(),
+                    notes: record.notes.as_deref(),
+                    tags: &record.tags,
+                    created: record.created,
+                    updated: record.updated,
+                })
+                .collect(),
+            next_record_id: self.next_id,
+        }
     }
 
     pub(crate) fn next_id(&self) -> Option<u64> {
@@ -366,8 +425,9 @@ impl Default for Records {
 }
 
 fn validate_unique_tags(tags: &[TagId]) -> Result<(), StorageError> {
-    for (index, tag) in tags.iter().enumerate() {
-        if tags[..index].contains(tag) {
+    let mut seen = HashSet::with_capacity(tags.len());
+    for tag in tags {
+        if !seen.insert(*tag) {
             return Err(StorageError::DuplicateRecordTag(*tag));
         }
     }
@@ -472,6 +532,31 @@ mod tests {
             Err(StorageError::DuplicateRecordId(_))
         ));
         assert!(restored.index_is_aligned());
+    }
+
+    #[test]
+    fn borrowed_and_owned_schema_views_round_trip_with_identical_bytes() {
+        let mut records = Records::new();
+        let mut record = new_record("猫-mail");
+        record.username = Some("é-user".into());
+        record.notes = Some("notes".into());
+        record.tags = vec![TagId::new(3), TagId::new(300)];
+        records
+            .create(record, Timestamp::from_unix_millis(123))
+            .unwrap();
+        let owned = crate::persistence::PersistedRecords {
+            records: records.persisted(),
+            next_record_id: records.next_id(),
+        };
+        let borrowed = postcard::to_allocvec(&records.persisted_view()).unwrap();
+        assert_eq!(borrowed, postcard::to_allocvec(&owned).unwrap());
+        let restored: crate::persistence::PersistedRecords =
+            postcard::from_bytes(&borrowed).unwrap();
+        let restored = Records::from_persisted(restored.records, restored.next_record_id).unwrap();
+        assert_eq!(
+            restored.get(RecordId::new(1)).unwrap().password(),
+            "猫-mail-secret"
+        );
     }
 
     impl Records {

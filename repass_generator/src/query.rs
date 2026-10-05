@@ -8,6 +8,9 @@ use crate::separator::Separator;
 pub struct GenerationLimits {
     max_shapes: usize,
     max_planner_states: usize,
+    max_output_chars: usize,
+    max_passwords: usize,
+    max_total_chars: usize,
 }
 
 impl GenerationLimits {
@@ -15,7 +18,38 @@ impl GenerationLimits {
         Self {
             max_shapes,
             max_planner_states,
+            ..Self::default()
         }
+    }
+
+    /// Bounds individual and collected outputs, measured in Unicode scalar values.
+    pub fn with_output_limits(mut self, per_password: usize, count: usize, total: usize) -> Self {
+        self.max_output_chars = per_password;
+        self.max_passwords = count;
+        self.max_total_chars = total;
+        self
+    }
+
+    pub fn max_output_chars(&self) -> usize {
+        self.max_output_chars
+    }
+    pub fn max_passwords(&self) -> usize {
+        self.max_passwords
+    }
+    pub fn max_total_chars(&self) -> usize {
+        self.max_total_chars
+    }
+
+    fn validate(&self) -> Result<(), GeneratorError> {
+        if self.max_shapes == 0
+            || self.max_planner_states == 0
+            || self.max_output_chars == 0
+            || self.max_passwords == 0
+            || self.max_total_chars == 0
+        {
+            return Err(GeneratorError::InvalidGenerationLimits);
+        }
+        Ok(())
     }
 
     pub fn max_shapes(&self) -> usize {
@@ -32,8 +66,19 @@ impl Default for GenerationLimits {
         Self {
             max_shapes: 100_000,
             max_planner_states: 100_000,
+            max_output_chars: 1_000_000,
+            max_passwords: 100_000,
+            max_total_chars: 16_000_000,
         }
     }
+}
+
+/// Shapes are not weighted by the number of passwords they can produce.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ShapeSelection {
+    #[default]
+    First,
+    Random,
 }
 
 pub enum PasswordLength {
@@ -71,6 +116,7 @@ pub struct Query<'a, 'entries> {
     dictionary: &'a DictionaryCache<'entries>,
     separator: &'a dyn Separator,
     limits: GenerationLimits,
+    shape_selection: ShapeSelection,
 }
 
 impl<'a, 'entries> Query<'a, 'entries> {
@@ -94,6 +140,16 @@ impl<'a, 'entries> Query<'a, 'entries> {
         limits: GenerationLimits,
     ) -> Result<Self, GeneratorError> {
         password_length.validate()?;
+        limits.validate()?;
+        let maximum = match password_length {
+            PasswordLength::Exact(n) => n,
+            PasswordLength::Range { max_chars, .. } => max_chars,
+        };
+        if maximum > limits.max_output_chars() {
+            return Err(GeneratorError::ResourceLimit {
+                target_chars: maximum,
+            });
+        }
         if dictionary.is_empty() {
             return Err(GeneratorError::EmptyDictionary);
         }
@@ -105,6 +161,7 @@ impl<'a, 'entries> Query<'a, 'entries> {
             dictionary,
             separator,
             limits,
+            shape_selection: ShapeSelection::First,
         })
     }
 
@@ -122,6 +179,15 @@ impl<'a, 'entries> Query<'a, 'entries> {
 
     pub fn limits(&self) -> GenerationLimits {
         self.limits
+    }
+
+    pub fn with_shape_selection(mut self, selection: ShapeSelection) -> Self {
+        self.shape_selection = selection;
+        self
+    }
+
+    pub fn shape_selection(&self) -> ShapeSelection {
+        self.shape_selection
     }
 }
 

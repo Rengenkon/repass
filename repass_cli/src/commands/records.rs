@@ -33,17 +33,16 @@ pub(super) fn execute_record(
                 })?;
             success(output, format_args!("Record created with ID {id}"))
         }
-        RecordCommand::List { tag } => {
+        RecordCommand::List { tag, name } | RecordCommand::Find { tag, name } => {
             let storage = session.ensure_storage(output, interactive)?;
-            let tags = storage.list_tags();
-            let records = storage.list_records(tag)?;
+            let records = storage.search_records(name.as_deref(), &tag)?;
             for record in records {
                 let tag_names = record
                     .tags
                     .iter()
                     .map(|id| {
-                        tags.iter()
-                            .find(|tag| tag.id() == *id)
+                        storage
+                            .get_tag(*id)
                             .map(|tag| {
                                 if tag.is_technical() {
                                     format!("{}:{} (technical)", id, tag.name())
@@ -69,7 +68,6 @@ pub(super) fn execute_record(
         RecordCommand::Show { record_id, reveal } => {
             let id = parse_record_id(&record_id)?;
             let storage = session.ensure_storage(output, interactive)?;
-            let tags = storage.list_tags();
             let record = storage.get_record(id)?;
             writeln!(output, "ID: {}", record.id)?;
             writeln!(output, "Name: {}", record.name)?;
@@ -80,8 +78,8 @@ pub(super) fn execute_record(
                 .tags
                 .iter()
                 .map(|id| {
-                    tags.iter()
-                        .find(|tag| tag.id() == *id)
+                    storage
+                        .get_tag(*id)
                         .map(|tag| {
                             if tag.is_technical() {
                                 format!("{} (technical)", tag.name())

@@ -1,10 +1,11 @@
-use super::{GenerateArgs, SeparatorKind};
+use super::{GenerateArgs, PresetKind, SeparatorKind, ShapeKind};
 use crate::Result;
 use repass_generator::dictionary::{
-    cache::DictionaryCache, file_dictionary::FileDictionary, presets,
+    cache::DictionaryCache, file_dictionary::FileDictionary, preset_dictionary::PresetDictionary,
+    presets,
 };
 use repass_generator::generator::generate_multi;
-use repass_generator::query::{PasswordLength, Query};
+use repass_generator::query::{PasswordLength, Query, ShapeSelection};
 use repass_generator::separator::{
     DEFAULT_SEPARATOR, Separator, between_parts::BetweenPartsSeparator,
     fixed_count::FixedCountSeparator, fixed_interval::FixedIntervalSeparator,
@@ -19,7 +20,26 @@ pub fn generate(args: GenerateArgs, default_warnings: bool) -> Result<(Vec<Strin
     };
     let dictionary = match args.dictionary {
         Some(path) => DictionaryCache::new(FileDictionary::from_path(path)?)?,
-        None => DictionaryCache::new(presets::all_presets())?,
+        None if args.preset.is_empty() => DictionaryCache::new(presets::all_presets())?,
+        None => {
+            let mut dictionary = PresetDictionary::new();
+            for preset in args.preset {
+                match preset {
+                    PresetKind::Digits => dictionary.add_digits(),
+                    PresetKind::Lowercase => dictionary.add_lowercase_letters(),
+                    PresetKind::Uppercase => dictionary.add_uppercase_letters(),
+                    PresetKind::Punctuation => dictionary.add_punctuation(),
+                    PresetKind::Symbols => dictionary.add_miscellaneous_symbols(),
+                    PresetKind::Brackets => dictionary.add_brackets(),
+                    PresetKind::Quotes => dictionary.add_quotes_and_ampersand_symbols(),
+                    PresetKind::HashDollarPercentCaret => {
+                        dictionary.add_hash_dollar_percent_caret_symbols()
+                    }
+                    PresetKind::BackslashPipeTilde => dictionary.add_backslash_pipe_tilde_symbols(),
+                };
+            }
+            DictionaryCache::new(dictionary)?
+        }
     };
     let text = args.separator.as_deref().unwrap_or(DEFAULT_SEPARATOR);
     let separator: Box<dyn Separator> = match args.separator_kind {
@@ -34,7 +54,19 @@ pub fn generate(args: GenerateArgs, default_warnings: bool) -> Result<(Vec<Strin
             args.separator_count.unwrap_or(3),
         )?),
     };
-    let query = Query::new(PasswordLength::Exact(args.length), &dictionary, &*separator)?;
+    let length = match (args.length, args.min_length, args.max_length) {
+        (Some(n), None, None) => PasswordLength::Exact(n),
+        (None, Some(min_chars), Some(max_chars)) => PasswordLength::Range {
+            min_chars,
+            max_chars,
+        },
+        _ => return Err("specify --length or both --min-length and --max-length".into()),
+    };
+    let selection = match args.shape_selection {
+        ShapeKind::First => ShapeSelection::First,
+        ShapeKind::Random => ShapeSelection::Random,
+    };
+    let query = Query::new(length, &dictionary, &*separator)?.with_shape_selection(selection);
     Ok((generate_multi(&query, args.count)?, warnings))
 }
 

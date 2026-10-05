@@ -7,6 +7,7 @@ use std::io;
 
 #[derive(Debug)]
 pub enum StorageError {
+    Locked,
     Io(io::Error),
     Vault(VaultError),
     MetadataCountsUpdateAfterDataSave(VaultError),
@@ -31,6 +32,7 @@ pub enum StorageError {
 impl Display for StorageError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Locked => formatter.write_str("vault is already open in another session"),
             Self::Io(error) => write!(formatter, "storage I/O error: {error}"),
             Self::Vault(error) => Display::fmt(error, formatter),
             Self::MetadataCountsUpdateAfterDataSave(error) => write!(

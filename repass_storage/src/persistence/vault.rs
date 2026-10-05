@@ -2,9 +2,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, Generate, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce};
 use rand::RngExt;
-#[cfg(test)]
 use serde::de::DeserializeOwned;
-use serde::de::{DeserializeSeed, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -36,6 +34,16 @@ const COUNTS_CIPHERTEXT_LEN: usize = COUNTS_PLAINTEXT_LEN + 16;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+thread_local! {
+    static WRITE_FAILURE: std::cell::RefCell<Option<(PathBuf, bool)>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_write(path: PathBuf, after_publication: bool) {
+    WRITE_FAILURE.with(|failure| *failure.borrow_mut() = Some((path, after_publication)));
+}
+
 #[derive(Debug)]
 pub enum VaultError {
     Io(std::io::Error),
@@ -45,11 +53,16 @@ pub enum VaultError {
     Serialization(postcard::Error),
     DataKindMismatch { expected: String, actual: String },
     DataVersionMismatch { expected: u16, actual: u16 },
+    WriteCommitted(std::io::Error),
 }
 
 impl Display for VaultError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::WriteCommitted(error) => write!(
+                formatter,
+                "file was replaced, but directory synchronization failed: {error}"
+            ),
             Self::Io(error) => write!(formatter, "vault I/O error: {error}"),
             Self::InvalidFormat(reason) => write!(formatter, "invalid vault format: {reason}"),
             Self::UnsupportedVersion(version) => {
@@ -74,7 +87,7 @@ impl Display for VaultError {
 impl Error for VaultError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Io(error) => Some(error),
+            Self::Io(error) | Self::WriteCommitted(error) => Some(error),
             Self::Serialization(error) => Some(error),
             _ => None,
         }
@@ -115,6 +128,7 @@ pub struct Vault {
     storage_id: [u8; STORAGE_ID_LEN],
     metadata_header: Vec<u8>,
     counts: VaultCounts,
+    counts_valid: bool,
 }
 
 impl Vault {
@@ -144,12 +158,14 @@ impl Vault {
 
         let path = path.as_ref().to_path_buf();
         write_new_atomically(&path, &bytes)?;
+        write_atomically(&backup_path(&path), &bytes)?;
         Ok(Self {
             path,
             data_key: data_key_bytes,
             storage_id,
             metadata_header: header,
             counts,
+            counts_valid: true,
         })
     }
 
@@ -172,7 +188,7 @@ impl Vault {
             return Err(VaultError::UnsupportedVersion(version));
         }
         let expected_len = HEADER_LEN + COUNTS_HEADER_LEN + COUNTS_CIPHERTEXT_LEN;
-        if bytes.len() != expected_len {
+        if bytes.len() < HEADER_LEN || bytes.len() > expected_len {
             return Err(VaultError::InvalidFormat("invalid metadata file length"));
         }
         let memory_kib = read_u32(&bytes, &mut offset)?;
@@ -203,7 +219,12 @@ impl Vault {
             .map_err(|_| VaultError::InvalidFormat("invalid wrapped key length"))?;
 
         let metadata_header = bytes[..HEADER_LEN].to_vec();
-        let counts = decode_counts(&data_key, storage_id, &bytes[HEADER_LEN..])?;
+        let decoded_counts = decode_counts(&data_key, storage_id, &bytes[HEADER_LEN..]);
+        let counts_valid = decoded_counts.is_ok();
+        let counts = decoded_counts.unwrap_or(VaultCounts {
+            records: 0,
+            tags: 0,
+        });
 
         Ok(Self {
             path,
@@ -211,6 +232,7 @@ impl Vault {
             storage_id,
             metadata_header,
             counts,
+            counts_valid,
         })
     }
 
@@ -248,36 +270,58 @@ impl Vault {
         bytes.extend_from_slice(&schema_version.to_le_bytes());
         bytes.extend_from_slice(nonce.as_slice());
         bytes.extend_from_slice(&encrypted);
-        write_atomically(path.as_ref(), &bytes)
+        let path = path.as_ref();
+        match fs::read(path) {
+            Ok(previous) if self.decrypt_data(&previous, kind, schema_version).is_ok() => {
+                write_atomically(&backup_path(path), &previous).map_err(before_primary_write)?;
+            }
+            Ok(_) => {} // Preserve an existing good backup during explicit recovery.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                write_atomically(&backup_path(path), &bytes).map_err(before_primary_write)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        write_atomically(path, &bytes)
     }
 
     /// Loads and authenticates one encrypted, typed data file.
-    #[cfg(test)]
     pub(crate) fn load_data_file<T: DeserializeOwned>(
         &self,
         path: impl AsRef<Path>,
         expected_kind: &str,
         expected_schema_version: u16,
     ) -> Result<T, VaultError> {
-        self.load_data_file_seed(
-            path,
-            expected_kind,
-            expected_schema_version,
-            OwnedSeed(std::marker::PhantomData),
-        )
+        let bytes = fs::read(path)?;
+        let plaintext = self.decrypt_data(&bytes, expected_kind, expected_schema_version)?;
+        let (document, trailing): (DataFile<T>, _) = postcard::take_from_bytes(&plaintext)?;
+        if !trailing.is_empty() {
+            return Err(VaultError::InvalidFormat("trailing bytes in data file"));
+        }
+        if document.storage_id != self.storage_id {
+            return Err(VaultError::InvalidFormat(
+                "data file belongs to another vault",
+            ));
+        }
+        if document.kind != expected_kind {
+            return Err(VaultError::DataKindMismatch {
+                expected: expected_kind.to_owned(),
+                actual: document.kind,
+            });
+        }
+        if document.schema_version != expected_schema_version {
+            return Err(VaultError::InvalidFormat(
+                "data-file schema header does not match its payload",
+            ));
+        }
+        Ok(document.value)
     }
 
-    pub(crate) fn load_data_file_seed<T, S>(
+    fn decrypt_data(
         &self,
-        path: impl AsRef<Path>,
+        bytes: &[u8],
         expected_kind: &str,
         expected_schema_version: u16,
-        value_seed: S,
-    ) -> Result<T, VaultError>
-    where
-        S: for<'de> DeserializeSeed<'de, Value = T>,
-    {
-        let bytes = fs::read(path)?;
+    ) -> Result<Vec<u8>, VaultError> {
         if bytes.len() < DATA_HEADER_LEN + NONCE_LEN + 16 {
             return Err(VaultError::InvalidFormat("truncated data file"));
         }
@@ -313,120 +357,69 @@ impl Vault {
                 },
             )
             .map_err(|_| VaultError::Crypto)?;
-        let mut deserializer = postcard::Deserializer::from_bytes(&plaintext);
-        let document = DataFileSeed { value_seed }.deserialize(&mut deserializer)?;
-        if !deserializer.finalize()?.is_empty() {
-            return Err(VaultError::InvalidFormat("trailing bytes in data file"));
-        }
-        if document.storage_id != self.storage_id {
-            return Err(VaultError::InvalidFormat(
-                "data file belongs to another vault",
-            ));
-        }
-        if document.kind != expected_kind {
-            return Err(VaultError::DataKindMismatch {
-                expected: expected_kind.to_owned(),
-                actual: document.kind,
-            });
-        }
-        if document.schema_version != file_schema_version {
-            return Err(VaultError::InvalidFormat(
-                "data-file schema header does not match its payload",
-            ));
-        }
         if file_schema_version != expected_schema_version {
             return Err(VaultError::DataVersionMismatch {
                 expected: expected_schema_version,
                 actual: file_schema_version,
             });
         }
-        Ok(document.value)
+        Ok(plaintext)
     }
 
     pub(crate) fn counts(&self) -> VaultCounts {
         self.counts
     }
 
+    pub(crate) fn counts_valid(&self) -> bool {
+        self.counts_valid
+    }
+
     pub(crate) fn save_counts(&mut self, counts: VaultCounts) -> Result<(), VaultError> {
+        if self.counts_valid && self.counts == counts {
+            return Ok(());
+        }
         let mut bytes = self.metadata_header.clone();
         bytes.extend_from_slice(&encode_counts(&self.data_key, self.storage_id, counts)?);
-        write_atomically(&self.path, &bytes)?;
-        self.counts = counts;
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-struct OwnedSeed<T>(std::marker::PhantomData<T>);
-
-#[cfg(test)]
-impl<'de, T: DeserializeOwned> DeserializeSeed<'de> for OwnedSeed<T> {
-    type Value = T;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        T::deserialize(deserializer)
-    }
-}
-
-struct DataFileSeed<S> {
-    value_seed: S,
-}
-
-impl<'de, T, S> DeserializeSeed<'de> for DataFileSeed<S>
-where
-    S: DeserializeSeed<'de, Value = T>,
-{
-    type Value = DataFile<T>;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_struct(
-            "DataFile",
-            &["storage_id", "kind", "schema_version", "value"],
-            DataFileVisitor(self.value_seed),
-        )
-    }
-}
-
-struct DataFileVisitor<S>(S);
-
-impl<'de, T, S> Visitor<'de> for DataFileVisitor<S>
-where
-    S: DeserializeSeed<'de, Value = T>,
-{
-    type Value = DataFile<T>;
-
-    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("an authenticated vault data file")
+        let result = write_atomically(&self.path, &bytes);
+        if result.is_ok() || matches!(result, Err(VaultError::WriteCommitted(_))) {
+            self.counts = counts;
+            self.counts_valid = true;
+        }
+        result
     }
 
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let storage_id = sequence
-            .next_element()?
-            .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
-        let kind = sequence
-            .next_element()?
-            .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
-        let schema_version = sequence
-            .next_element()?
-            .ok_or_else(|| serde::de::Error::invalid_length(2, &self))?;
-        let value = sequence
-            .next_element_seed(self.0)?
-            .ok_or_else(|| serde::de::Error::custom("missing data-file value"))?;
-        Ok(DataFile {
-            storage_id,
-            kind,
-            schema_version,
-            value,
-        })
+    /// Rewraps the existing data key; record and tag files retain their encoding.
+    pub(crate) fn change_password(&mut self, password: &[u8]) -> Result<(), VaultError> {
+        let mut salt = [0; SALT_LEN];
+        rand::rng().fill(&mut salt);
+        let key = derive_wrapping_key(password, &salt, KDF_MEMORY_KIB, KDF_ITERATIONS, KDF_LANES)?;
+        let header = metadata_header(&key, &self.data_key, &salt, &self.storage_id)?;
+        let mut bytes = header.clone();
+        bytes.extend_from_slice(&encode_counts(
+            &self.data_key,
+            self.storage_id,
+            self.counts,
+        )?);
+        // Update the backup first so it never retains the old password after success.
+        write_atomically(&backup_path(&self.path), &bytes).map_err(before_primary_write)?;
+        let result = write_atomically(&self.path, &bytes);
+        if result.is_ok() || matches!(result, Err(VaultError::WriteCommitted(_))) {
+            self.metadata_header = header;
+            self.counts_valid = true;
+        }
+        result
+    }
+
+    pub(crate) fn restore_data_file(
+        &self,
+        path: &Path,
+        kind: &str,
+        version: u16,
+    ) -> Result<(), VaultError> {
+        let backup = fs::read(backup_path(path))?;
+        self.decrypt_data(&backup, kind, version)?;
+        preserve_damaged(path)?;
+        write_atomically(path, &backup)
     }
 }
 
@@ -607,16 +600,35 @@ fn take_array<const N: usize>(bytes: &[u8], offset: &mut usize) -> Result<[u8; N
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
-    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_path = path.with_extension(format!("tmp-{}-{counter}", std::process::id()));
+    #[cfg(test)]
+    let injected = WRITE_FAILURE.with(|failure| {
+        let mut failure = failure.borrow_mut();
+        if failure.as_ref().is_some_and(|(target, _)| target == path) {
+            failure.take().map(|(_, after)| after)
+        } else {
+            None
+        }
+    });
+    #[cfg(test)]
+    if injected == Some(false) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "injected write failure",
+        )
+        .into());
+    }
+    let (temp_path, mut file) = create_temporary(path)?;
     let write_result = (|| -> Result<(), VaultError> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::rename(&temp_path, path)?;
+        #[cfg(test)]
+        if injected == Some(true) {
+            return Err(VaultError::WriteCommitted(std::io::Error::other(
+                "injected directory synchronization failure",
+            )));
+        }
+        sync_parent(path).map_err(VaultError::WriteCommitted)?;
         Ok(())
     })();
     if write_result.is_err() {
@@ -625,24 +637,84 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
     write_result
 }
 
+fn sync_parent(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
+pub(crate) fn backup_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".bak");
+    name.into()
+}
+
+pub(crate) fn write_recovered(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
+    write_atomically(path, bytes)
+}
+
+pub(crate) fn preserve_damaged(path: &Path) -> Result<(), VaultError> {
+    if !path.try_exists()? {
+        return Ok(());
+    }
+    let bytes = fs::read(path)?;
+    loop {
+        let id = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut name = path.as_os_str().to_os_string();
+        name.push(format!(".damaged-{}-{id}", std::process::id()));
+        match write_new_atomically(Path::new(&name), &bytes) {
+            Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                continue;
+            }
+            result => return result,
+        }
+    }
+}
+
 fn write_new_atomically(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
-    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_path = path.with_extension(format!("tmp-{}-{counter}", std::process::id()));
+    let (temp_path, mut file) = create_temporary(path)?;
     let write_result = (|| -> Result<(), VaultError> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::hard_link(&temp_path, path)?;
         let _ = fs::remove_file(&temp_path);
+        sync_parent(path).map_err(VaultError::WriteCommitted)?;
         Ok(())
     })();
     if write_result.is_err() {
         let _ = fs::remove_file(&temp_path);
     }
     write_result
+}
+
+fn create_temporary(path: &Path) -> Result<(PathBuf, File), VaultError> {
+    for _ in 0..64 {
+        let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp = path.with_extension(format!("tmp-{}-{counter}", std::process::id()));
+        match OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => return Ok((temp, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "cannot allocate an unused temporary vault file",
+    )
+    .into())
+}
+
+fn before_primary_write(error: VaultError) -> VaultError {
+    match error {
+        VaultError::WriteCommitted(error) => VaultError::Io(error),
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -686,10 +758,11 @@ mod tests {
         let mut bytes = fs::read(&metadata_path).unwrap();
         *bytes.last_mut().unwrap() ^= 1;
         fs::write(&metadata_path, bytes).unwrap();
-        assert!(matches!(
-            Vault::open(&metadata_path, b"master"),
-            Err(VaultError::Crypto)
-        ));
+        assert!(
+            !Vault::open(&metadata_path, b"master")
+                .unwrap()
+                .counts_valid()
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -794,6 +867,14 @@ mod tests {
             .unwrap();
         assert!(matches!(
             vault.load_data_file::<String>(&data_path, "records", 1),
+            Err(VaultError::DataVersionMismatch {
+                expected: 1,
+                actual: 2
+            })
+        ));
+        // A genuinely incompatible value must still report the version first.
+        assert!(matches!(
+            vault.load_data_file::<u64>(&data_path, "records", 1),
             Err(VaultError::DataVersionMismatch {
                 expected: 1,
                 actual: 2

@@ -161,6 +161,61 @@ impl Session {
         Ok(())
     }
 
+    pub fn recover_storage(
+        &mut self,
+        output_stream: &mut impl Write,
+        interactive: bool,
+        finish: bool,
+    ) -> Result<()> {
+        self.close();
+        let mut password =
+            read_master_password(self.secret_input.as_mut(), output_stream, interactive)?
+                .into_bytes();
+        let result = if finish {
+            Storage::finish_initialization_in(&self.data_dir, &password)
+        } else {
+            Storage::recover_in(&self.data_dir, &password)
+        };
+        password.fill(0);
+        self.storage = Some(result?);
+        Ok(())
+    }
+
+    pub fn change_master_password(
+        &mut self,
+        output_stream: &mut impl Write,
+        interactive: bool,
+    ) -> Result<()> {
+        self.ensure_storage(output_stream, interactive)?;
+        write!(output_stream, "New master password: ")?;
+        output_stream.flush()?;
+        let mut password = self.read_secret()?.into_bytes();
+        write!(output_stream, "Confirm new master password: ")?;
+        output_stream.flush()?;
+        let confirmation = self.read_secret();
+        let result = match confirmation {
+            Ok(value) => {
+                let mut confirmation = value.into_bytes();
+                let matches = confirmation == password;
+                confirmation.fill(0);
+                if !matches {
+                    Err("master passwords do not match".into())
+                } else if password.is_empty() {
+                    Err("new master password must not be empty".into())
+                } else {
+                    self.storage
+                        .as_mut()
+                        .ok_or("vault is not open")?
+                        .change_master_password(&password)
+                        .map_err(Into::into)
+                }
+            }
+            Err(error) => Err(error.into()),
+        };
+        password.fill(0);
+        result
+    }
+
     pub fn switch(&mut self, directory: PathBuf) -> Result<()> {
         let directory = expand(directory, std::env::var_os("HOME"))?;
         self.close();

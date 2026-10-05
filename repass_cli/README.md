@@ -3,11 +3,15 @@
 Run with `cargo run -p repass_cli -- <arguments>` or build the `repass` binary.
 
 ```text
-repass generate --length <N> --separator-kind <KIND> [--count <N>] [--dictionary <FILE>] [--separator <TEXT>] [--separator-interval <N>] [--separator-count <N>] [--warnings | --no-warnings]
+repass generate (--length <N> | --min-length <N> --max-length <N>) --separator-kind <KIND> [--count <N>] [--dictionary <FILE> | --preset <SET>...] [--shape-selection first|random] [--separator <TEXT>] [--separator-interval <N>] [--separator-count <N>] [--warnings | --no-warnings]
 repass vault [--data-dir <DIR>] init
 repass vault [--data-dir <DIR>] info
+repass vault [--data-dir <DIR>] change-password
+repass vault [--data-dir <DIR>] recover
+repass vault [--data-dir <DIR>] finish-init
 repass record [--data-dir <DIR>] add --name <NAME> --password-stdin [--username <TEXT>] [--url <URL>] [--notes <TEXT>] [--tag <TAG_ID>...]
-repass record [--data-dir <DIR>] list [--tag <TAG_ID>]
+repass record [--data-dir <DIR>] list [--name <NAME>] [--tag <TAG_ID>...]
+repass record [--data-dir <DIR>] find [--name <NAME>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] show <RECORD_ID> [--reveal]
 repass record [--data-dir <DIR>] update <RECORD_ID> [--name <NAME>] [--username <TEXT> | --clear-username] [--url <URL> | --clear-url] [--notes <TEXT> | --clear-notes] [--password-stdin] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
 repass record [--data-dir <DIR>] delete <RECORD_ID>
@@ -84,8 +88,9 @@ script to stdout; it does not install or modify shell configuration files.
 
 Generation works through `repass_generator`. Length means Unicode scalar values,
 including separators. The default dictionary uses all built-in character sets.
-Both `--length` and `--separator-kind` are mandatory in one-shot mode; the session
-prompts for missing values and displays the numbered strategy list.
+Specify `--length` or both `--min-length` and `--max-length`, together with
+`--separator-kind`. The session prompts for a missing exact length and strategy,
+and displays the numbered strategy list.
 
 Strategies accept either their name or the fixed number shown in help:
 
@@ -110,11 +115,29 @@ change it with `warnings`, `warnings on`, or `warnings off`. Some exact lengths
 cannot be formed with a chosen dictionary and separator configuration; the
 generator reports an error rather than changing the requested length.
 
+The length range is inclusive. Targets are sampled from the whole range; an
+unreachable sampled target is an error. `--shape-selection first` (the default)
+uses the first feasible layout. `random` samples uniformly among feasible layouts,
+not among all possible passwords.
+
+`--preset` selects one or more built-in sets: `digits`, `lowercase`, `uppercase`,
+`punctuation`, `symbols`, `brackets`, `quotes`, `hash-dollar-percent-caret`, and
+`backslash-pipe-tilde`. It conflicts with `--dictionary`. Selecting several sets
+builds their union; it does not require every selected set to appear in each
+password. Without either option, all built-in sets are used.
+
+Individual output lengths are limited to 1,000,000 Unicode scalars, batch counts
+to 100,000, and collected batch lengths to 16,000,000 scalars, calculated from
+the maximum target length. The library exposes customizable limits and lazy
+streaming generation.
+
 ```text
 repass generate --length 16 --separator-kind none
 repass generate --length 16 --separator-kind 2 --separator "::"
 repass generate --length 20 --separator-kind fixed-interval --separator-interval 4
 repass generate --length 20 --separator-kind 4 --separator-count 2
+repass generate --min-length 12 --max-length 20 --separator-kind none --preset digits lowercase
+repass generate --length 18 --separator-kind between-parts --dictionary words.txt --shape-selection random
 ```
 
 ## Storage format and tag catalog
@@ -125,6 +148,9 @@ Storage uses three files in the selected data directory:
 metadata.repass  # key metadata
 records.repass   # encrypted records and the next record ID
 tags.repass      # encrypted tag names and the next tag ID; optional
+metadata.repass.bak  # wrapped-key backup, refreshed on master-password change
+records.repass.bak   # authenticated previous records (initially the first snapshot)
+tags.repass.bak      # authenticated previous tag catalog
 ```
 
 Record changes atomically replace `records.repass`; tag catalog changes
@@ -136,10 +162,50 @@ data-file format versions are accepted; older or unknown versions are rejected
 without migration. Current data-file headers authenticate the schema version,
 allowing an unsupported data schema to be reported distinctly from an
 authentication failure.
+Vault sessions hold an exclusive advisory lock on the data directory. A second
+session opening the same directory receives an error until the first closes.
+Directory locking and directory synchronization are supported on the Linux/Unix
+platforms targeted by this project. Data writes synchronize the temporary file
+and, on Unix, the parent directory after publication. If publication succeeded
+but directory synchronization failed, the error explicitly says that the file
+was already replaced.
+
+Counts are auxiliary: damaged counts can be rebuilt from readable data, and a
+failure to write repaired counts does not prevent opening the records. `vault
+info` reports such a repair failure. Operations that do not change counts avoid
+rewriting metadata.
+
 Storage commands lazily request the master password and create a new vault when
 no vault files exist. `vault init` explicitly creates one and refuses to replace
 existing files. A partial initialization is reported as an error rather than
 silently treated as an empty vault.
+Surviving `.bak` files also prevent automatic initialization when the primary
+files are missing; use `vault recover` to restore them.
+
+`vault change-password` requests the current password when opening, then requests
+and confirms a nonempty new password. It rewraps the existing data key in both
+metadata and its backup; record and tag files are not rewritten. The metadata
+backup is updated first. If changing the primary metadata subsequently fails,
+the original primary remains usable with the old password and `vault recover`
+with the new password can publish the updated backup.
+
+`vault recover` validates backup authentication and domain invariants before
+replacing damaged or missing files. Damaged originals are copied to unique
+`.damaged-<pid>-<counter>` files. Restoring records or tags uses the previous
+snapshot and can therefore lose the most recent mutation. Recovery is explicit,
+not automatic, and cannot recreate data without a usable backup. Individual
+files are published atomically; recovery across several files is not a single
+transaction and can be retried after an I/O failure.
+
+`vault finish-init` explicitly creates empty records only when authenticated
+metadata has valid zero counts and neither records/tags nor their backups exist.
+It refuses damaged count metadata and metadata with nonzero counts.
+This command is an explicit decision to create empty records: stale counts alone
+cannot prove that data files were never present.
+
+`record find` and `record list` support exact `--name` matching and multiple
+`--tag` IDs. Every requested tag must match. Results are ordered by stable record
+ID and do not reveal passwords.
 
 The tag catalog is optional. If it is missing or unreadable, records remain
 available. Referenced IDs without a stored name are shown as temporary technical

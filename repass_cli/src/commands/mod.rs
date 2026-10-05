@@ -68,15 +68,27 @@ pub enum Command {
 #[derive(Args)]
 pub struct GenerateArgs {
     /// Exact length in Unicode scalar values, including separators
-    #[arg(long, value_parser = positive_usize)]
-    pub length: usize,
+    #[arg(long, value_parser = positive_usize, required_unless_present = "min_length", conflicts_with_all = ["min_length", "max_length"])]
+    pub length: Option<usize>,
+    /// Inclusive lower bound of a random target length
+    #[arg(long, value_parser = positive_usize, requires = "max_length")]
+    pub min_length: Option<usize>,
+    /// Inclusive upper bound of a random target length
+    #[arg(long, value_parser = positive_usize, requires = "min_length")]
+    pub max_length: Option<usize>,
     #[arg(long, value_enum, hide_possible_values = true, help = SEPARATOR_HELP)]
     pub separator_kind: SeparatorKind,
     #[arg(long, default_value = "1", value_parser = positive_usize)]
     pub count: usize,
     /// UTF-8 dictionary, one entry per line; default: all built-in character sets
-    #[arg(long, value_hint = ValueHint::FilePath)]
+    #[arg(long, value_hint = ValueHint::FilePath, conflicts_with = "preset")]
     pub dictionary: Option<PathBuf>,
+    /// Built-in character sets (repeat or pass multiple names); default: all
+    #[arg(long, value_enum, num_args = 1..)]
+    pub preset: Vec<PresetKind>,
+    /// Choose the first feasible layout or a random feasible layout
+    #[arg(long, value_enum, default_value = "first")]
+    pub shape_selection: ShapeKind,
     /// Separator text; default: "-"; ignored by none
     #[arg(long, allow_hyphen_values = true, value_parser = nonempty_separator)]
     pub separator: Option<String>,
@@ -123,6 +135,25 @@ pub enum SeparatorKind {
     FixedInterval,
     #[value(alias = "4")]
     FixedCount,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ShapeKind {
+    First,
+    Random,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum PresetKind {
+    Digits,
+    Lowercase,
+    Uppercase,
+    Punctuation,
+    Symbols,
+    Brackets,
+    Quotes,
+    HashDollarPercentCaret,
+    BackslashPipeTilde,
 }
 
 #[derive(Subcommand)]
@@ -172,6 +203,12 @@ pub enum VaultCommand {
     Init,
     /// Show vault information
     Info,
+    /// Restore authenticated backups, preserving damaged originals
+    Recover,
+    /// Complete an interrupted initialization with authenticated empty metadata
+    FinishInit,
+    /// Rewrap the data key with a new master password
+    ChangePassword,
     /// Close the current vault and select another directory (interactive only)
     #[command(hide = true)]
     Switch {
@@ -198,8 +235,17 @@ pub enum RecordCommand {
         tag: Vec<TagId>,
     },
     List {
+        #[arg(long, num_args = 1..)]
+        tag: Vec<TagId>,
         #[arg(long)]
-        tag: Option<TagId>,
+        name: Option<String>,
+    },
+    /// Find records by exact name and/or every requested tag
+    Find {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, num_args = 1..)]
+        tag: Vec<TagId>,
     },
     Show {
         record_id: String,
@@ -326,6 +372,12 @@ pub fn execute(
             writeln!(output, "Data directory: {}", info.directory.display())?;
             writeln!(output, "Records: {}", info.record_count)?;
             writeln!(output, "Tags: {}", info.tag_count)?;
+            if let Some(warning) = info.metadata_warning {
+                output::warning(
+                    output,
+                    format!("metadata counts could not be repaired: {warning}"),
+                )?;
+            }
             match info.tag_catalog {
                 repass_storage::TagCatalogStatus::Present => {
                     writeln!(output, "Tag catalog: present")?
@@ -339,6 +391,30 @@ pub fn execute(
                 }
             }
             Ok(())
+        }
+        Command::Vault {
+            command: VaultCommand::Recover,
+            ..
+        } => {
+            session.recover_storage(output, interactive, false)?;
+            success(
+                output,
+                "Vault restored from available authenticated backups",
+            )
+        }
+        Command::Vault {
+            command: VaultCommand::FinishInit,
+            ..
+        } => {
+            session.recover_storage(output, interactive, true)?;
+            success(output, "Vault initialization completed")
+        }
+        Command::Vault {
+            command: VaultCommand::ChangePassword,
+            ..
+        } => {
+            session.change_master_password(output, interactive)?;
+            success(output, "Master password changed")
         }
         Command::Record { command, .. } => {
             records::execute_record(command, session, input, output, interactive)
@@ -512,12 +588,17 @@ mod tests {
             false,
         )
         .unwrap();
+        session.close();
         assert_eq!(
             Storage::open_in(&directory.0, b"master")
                 .unwrap()
                 .list_tags()[0]
                 .name(),
             "new"
+        );
+        session = Session::with_storage(
+            directory.0.clone(),
+            Storage::open_in(&directory.0, b"master").unwrap(),
         );
         let mut output = Vec::new();
         execute(
@@ -631,5 +712,104 @@ mod tests {
                 .password(),
             "record-secret"
         );
+    }
+
+    #[test]
+    fn master_password_command_confirms_secrets_and_keeps_session_usable() {
+        let directory = TestDirectory::new();
+        Storage::create_in(&directory.0, b"old").unwrap();
+        let mut session = Session::with_passwords(
+            directory.0.clone(),
+            ["old".into(), "new-secret".into(), "new-secret".into()],
+        );
+        let mut output = Vec::new();
+        execute(
+            Command::Vault {
+                data_dir: None,
+                command: VaultCommand::ChangePassword,
+            },
+            &mut session,
+            &mut Cursor::new(""),
+            &mut output,
+            true,
+        )
+        .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("Master password changed"));
+        assert!(!text.contains("new-secret"));
+        assert_eq!(
+            session
+                .ensure_storage(&mut Vec::new(), true)
+                .unwrap()
+                .info()
+                .record_count,
+            0
+        );
+        session.close();
+        assert!(Storage::open_in(&directory.0, b"old").is_err());
+        assert!(Storage::open_in(&directory.0, b"new-secret").is_ok());
+    }
+
+    #[test]
+    fn mismatched_new_master_passwords_leave_the_original_password_valid() {
+        let directory = TestDirectory::new();
+        Storage::create_in(&directory.0, b"old").unwrap();
+        let mut session = Session::with_passwords(
+            directory.0.clone(),
+            ["old".into(), "new".into(), "different".into()],
+        );
+        assert!(
+            execute(
+                Command::Vault {
+                    data_dir: None,
+                    command: VaultCommand::ChangePassword
+                },
+                &mut session,
+                &mut Cursor::new(""),
+                &mut Vec::new(),
+                true
+            )
+            .is_err()
+        );
+        session.close();
+        assert!(Storage::open_in(&directory.0, b"old").is_ok());
+    }
+
+    #[test]
+    fn find_command_filters_records_without_revealing_passwords() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let a = storage.create_tag("a").unwrap();
+        let b = storage.create_tag("b").unwrap();
+        let make = |name: &str, tags| NewRecord {
+            name: name.into(),
+            password: "hidden-secret".into(),
+            username: None,
+            url: None,
+            notes: None,
+            tags,
+        };
+        storage.create_record(make("wanted", vec![a, b])).unwrap();
+        storage.create_record(make("other", vec![a, b])).unwrap();
+        let mut session = Session::with_storage(directory.0.clone(), storage);
+        let mut output = Vec::new();
+        execute(
+            Command::Record {
+                data_dir: None,
+                command: RecordCommand::Find {
+                    name: Some("wanted".into()),
+                    tag: vec![a, b],
+                },
+            },
+            &mut session,
+            &mut Cursor::new(""),
+            &mut output,
+            false,
+        )
+        .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("wanted"));
+        assert!(!text.contains("other"));
+        assert!(!text.contains("hidden-secret"));
     }
 }

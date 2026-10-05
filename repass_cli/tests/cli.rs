@@ -51,6 +51,93 @@ fn generation_respects_exact_unicode_length_and_count() {
 }
 
 #[test]
+fn long_password_generation_and_selected_presets_work() {
+    let output = cli()
+        .args([
+            "generate",
+            "--length",
+            "500",
+            "--separator-kind",
+            "none",
+            "--preset",
+            "digits",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let password = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(password.trim_end().len(), 500);
+    assert!(password.trim_end().chars().all(|c| c.is_ascii_digit()));
+}
+
+#[test]
+fn inclusive_ranges_and_shape_modes_are_available_in_cli() {
+    let output = cli()
+        .args([
+            "generate",
+            "--min-length",
+            "8",
+            "--max-length",
+            "12",
+            "--count",
+            "20",
+            "--separator-kind",
+            "none",
+            "--shape-selection",
+            "random",
+            "--preset",
+            "digits",
+            "lowercase",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(text.lines().count(), 20);
+    assert!(text.lines().all(|p| {
+        (8..=12).contains(&p.len())
+            && p.chars()
+                .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
+    }));
+}
+
+#[test]
+fn invalid_ranges_conflicting_dictionary_options_and_oversized_batches_fail() {
+    for options in [
+        vec!["--min-length", "8"],
+        vec!["--max-length", "12"],
+        vec!["--min-length", "12", "--max-length", "8"],
+        vec!["--length", "8", "--min-length", "8", "--max-length", "12"],
+        vec![
+            "--length",
+            "8",
+            "--dictionary",
+            "unused.txt",
+            "--preset",
+            "digits",
+        ],
+        vec!["--length", "8", "--count", "100001"],
+        vec!["--length", "1000001"],
+    ] {
+        let output = cli()
+            .args(["generate", "--separator-kind", "none"])
+            .args(&options)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{options:?}");
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
 fn one_shot_missing_arguments_and_interactive_only_switch_are_errors() {
     for arguments in [
         vec!["generate"],

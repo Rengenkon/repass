@@ -43,7 +43,14 @@ fn schema() -> clap::Command {
 
 fn optional_arguments(command: clap::Command) -> clap::Command {
     command
-        .mut_args(|arg| arg.required(false))
+        .mut_args(|arg| {
+            let arg = arg.required(false);
+            if arg.get_id().as_str() == "length" {
+                arg.required_unless_present(clap::builder::Resettable::<clap::Id>::Reset)
+            } else {
+                arg
+            }
+        })
         .mut_subcommands(optional_arguments)
 }
 
@@ -77,8 +84,13 @@ struct Missing {
 fn missing_arguments(command: &clap::Command, matches: &ArgMatches, missing: &mut Vec<Missing>) {
     for arg in command.get_arguments() {
         if arg.is_required_set()
-            && matches.value_source(arg.get_id().as_str()) != Some(ValueSource::CommandLine)
+            || (arg.get_id().as_str() == "length"
+                && matches.value_source("length") != Some(ValueSource::CommandLine)
+                && matches.value_source("min_length") != Some(ValueSource::CommandLine))
         {
+            if matches.value_source(arg.get_id().as_str()) == Some(ValueSource::CommandLine) {
+                continue;
+            }
             missing.push(Missing {
                 name: arg.get_id().to_string(),
                 long: arg.get_long().map(str::to_owned),
@@ -304,7 +316,9 @@ mod tests {
             &mut output,
         )
         .unwrap();
-        assert!(matches!(command, Command::Generate(args) if args.length == 7 && args.count == 1));
+        assert!(
+            matches!(command, Command::Generate(args) if args.length == Some(7) && args.count == 1)
+        );
         assert!(String::from_utf8(output).unwrap().contains("length: "));
         assert!(
             parse(
@@ -344,6 +358,21 @@ mod tests {
         assert!(
             matches!(command, Command::Record { command: commands::RecordCommand::Add { name, password_stdin: true, .. }, .. } if name == "My mail")
         );
+    }
+
+    #[test]
+    fn complete_range_does_not_prompt_for_an_exact_length() {
+        let mut output = Vec::new();
+        let command = parse(
+            shlex::split("generate --min-length 4 --max-length 8 --separator-kind none").unwrap(),
+            &mut Cursor::new(""),
+            &mut output,
+        )
+        .unwrap();
+        assert!(
+            matches!(command, Command::Generate(args) if args.length.is_none() && args.min_length == Some(4) && args.max_length == Some(8))
+        );
+        assert!(output.is_empty());
     }
 
     #[test]

@@ -17,10 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dictionary = DictionaryCache::new(dictionary)?;
     let separator = BetweenPartsSeparator::new("-")?;
     let query = Query::new(
-        PasswordLength::Range {
-            min_chars: 12,
-            max_chars: 20,
-        },
+        PasswordLength::Exact(18),
         &dictionary,
         &separator,
     )?;
@@ -51,7 +48,7 @@ Empty dictionaries and empty entries are rejected. Duplicate values from file/en
 
 `PasswordLength::Exact(n)` requests exactly `n` characters. `PasswordLength::Range { min_chars, max_chars }` chooses a target inclusively from the range. The default is 12 through 20 characters.
 
-`GenerationLimits` bounds the number of separator shapes and planner states examined. Its defaults are 100,000 for each limit. If a limit is reached, generation returns an error rather than searching indefinitely.
+`GenerationLimits` bounds the number of candidate separator shapes and newly searched planner states (100,000 each by default). It also bounds individual output lengths (1,000,000 Unicode scalars), batch counts (100,000), and collected batch lengths (16,000,000 scalars, conservatively computed from the maximum target length). Use `with_output_limits` to customize output bounds. Zero limits are rejected when constructing a query. If a limit is exceeded, generation returns an error.
 
 ### Separators
 
@@ -74,11 +71,15 @@ A `SeparationShape` describes the content length and number of dictionary entrie
 
 This separation of responsibilities lets the generator account for separator characters when honoring an exact output length.
 
-For each request, the generator tries shapes in the order returned by the strategy and uses randomized choices among feasible entry lengths and entries for that shape. The result is not sampled uniformly from every possible password.
+By default, the generator selects the first feasible shape and randomizes feasible entry lengths and entries within it. Use `Query::with_shape_selection(ShapeSelection::Random)` to choose uniformly among feasible shapes. Neither mode samples uniformly among all possible passwords. Bounds from dictionary entry lengths prune impossible shapes, and both successful and failed reachability checks are memoized. Equal-length dictionaries use a direct feasibility calculation.
 
 ## Generating multiple passwords
 
 Use `generate_multi(query, count)` to generate multiple passwords. For reproducible output in tests or other controlled contexts, use `generate_once_with_rng` or `generate_multi_with_rng` and provide an RNG.
+
+Batch generation reuses feasible shapes and reachability instead of rebuilding the search for every password. `PasswordGenerator` provides the same reusable state for callers that supply an RNG. `generate_stream(query, count)` returns a lazy iterator, keeps no output collection, and stops after its first error. Streaming applies individual-length and count limits but not the collected-batch length limit. Cached target shapes and search states are periodically discarded to bound retained search data.
+
+For ranged lengths, a target is sampled from the entire inclusive range. An unreachable sampled length is an error; the generator does not silently retry with another length. The quick-start example uses a reachable exact length so that it does not fail randomly.
 
 ## Errors and limits
 

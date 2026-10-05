@@ -2,6 +2,10 @@ use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GeneratorError {
+    InvalidGenerationLimits,
+    BatchLimitExceeded {
+        count: usize,
+    },
     InvalidPasswordLengthRange {
         min_chars: usize,
         max_chars: usize,
@@ -47,6 +51,11 @@ pub enum SeparatorError {
 impl Display for GeneratorError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidGenerationLimits => write!(f, "generation limits must be positive"),
+            Self::BatchLimitExceeded { count } => write!(
+                f,
+                "batch of {count} passwords exceeds the configured output limits"
+            ),
             Self::InvalidPasswordLengthRange {
                 min_chars,
                 max_chars,
