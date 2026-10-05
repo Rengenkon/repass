@@ -3,26 +3,29 @@
 Run with `cargo run -p repass_cli -- <arguments>` or build the `repass` binary.
 
 ```text
-repass [--data-dir <DIR>] generate --length <N> --separator-kind <KIND> [--count <N>] [--dictionary <FILE>] [--separator <TEXT>] [--separator-interval <N>] [--separator-count <N>]
-repass [--data-dir <DIR>] vault init
-repass [--data-dir <DIR>] vault info
-repass [--data-dir <DIR>] record add --name <NAME> --password-stdin [--username <TEXT>] [--url <URL>] [--notes <TEXT>] [--tag <TAG_ID>...]
-repass [--data-dir <DIR>] record list [--tag <TAG_ID>]
-repass [--data-dir <DIR>] record show <RECORD_ID> [--reveal]
-repass [--data-dir <DIR>] record update <RECORD_ID> [--name <NAME>] [--username <TEXT>] [--url <URL>] [--notes <TEXT>] [--password-stdin] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
-repass [--data-dir <DIR>] record delete <RECORD_ID>
-repass [--data-dir <DIR>] tag add --name <NAME>
-repass [--data-dir <DIR>] tag list
-repass [--data-dir <DIR>] tag delete <TAG_ID>
-repass [--data-dir <DIR>] tag rename <TAG_ID> --name <NAME>
-repass [--data-dir <DIR>] tag recover
-repass [--data-dir <DIR>] interactive
+repass generate --length <N> --separator-kind <KIND> [--count <N>] [--dictionary <FILE>] [--separator <TEXT>] [--separator-interval <N>] [--separator-count <N>] [--warnings | --no-warnings]
+repass vault [--data-dir <DIR>] init
+repass vault [--data-dir <DIR>] info
+repass record [--data-dir <DIR>] add --name <NAME> --password-stdin [--username <TEXT>] [--url <URL>] [--notes <TEXT>] [--tag <TAG_ID>...]
+repass record [--data-dir <DIR>] list [--tag <TAG_ID>]
+repass record [--data-dir <DIR>] show <RECORD_ID> [--reveal]
+repass record [--data-dir <DIR>] update <RECORD_ID> [--name <NAME>] [--username <TEXT>] [--url <URL>] [--notes <TEXT>] [--password-stdin] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
+repass record [--data-dir <DIR>] delete <RECORD_ID>
+repass tag [--data-dir <DIR>] add --name <NAME>
+repass tag [--data-dir <DIR>] list
+repass tag [--data-dir <DIR>] delete <TAG_ID>
+repass tag [--data-dir <DIR>] rename <TAG_ID> --name <NAME>
+repass tag [--data-dir <DIR>] recover
+repass interactive [--data-dir <DIR>] [--warnings | --no-warnings]
 repass completions <SHELL>
 ```
 
-`--data-dir` is global and can also follow a subcommand. Directory precedence:
-explicit argument, `REPASS_DATA_DIR`, then `$HOME/.repass`. A leading `~` path
-component expands to `$HOME`. An empty selected directory is an error.
+`--data-dir` is available on vault, record, tag, and interactive commands. It
+can appear anywhere within that command group, such as `repass record list
+--data-dir <DIR>`. Directory precedence: explicit argument, `REPASS_DATA_DIR`,
+then `$HOME/.repass`. A leading `~` path component expands to `$HOME`. An empty
+selected directory is an error. Generation and shell completions do not use a
+data directory.
 
 `repass` without a command displays help. Use `repass interactive` to start a
 session. Enter the same commands
@@ -93,10 +96,17 @@ Strategies accept either their name or the fixed number shown in help:
 4. `fixed-count` — distribute the requested number of separators across content;
    short content may reduce the number of insertions.
 
-`--separator` defaults to `-`, must be nonempty, and is inapplicable to `none`.
-`--separator-interval` is a positive integer for `fixed-interval` only (default
-`5`). `--separator-count` is a positive integer for `fixed-count` only (default
-`3`). Unsupported option/strategy combinations are errors. Some exact lengths
+`--separator` defaults to `-` and must be nonempty. `--separator-interval` must
+be a positive integer (default `5` when used by `fixed-interval`), and
+`--separator-count` must be a positive integer (default `3` when used by
+`fixed-count`). Values are type-checked even when they do not apply to the chosen
+strategy; valid but unused options are ignored with a warning by default.
+`--warnings` enables these warnings and `--no-warnings` suppresses them for that
+generation command. One-shot generation writes warnings to stderr and passwords
+to stdout. In an interactive session, the command-level flags override
+the session setting only for that invocation. Set the session default on entry
+with `interactive --warnings` or `interactive --no-warnings`, then inspect or
+change it with `warnings`, `warnings on`, or `warnings off`. Some exact lengths
 cannot be formed with a chosen dictionary and separator configuration; the
 generator reports an error rather than changing the requested length.
 

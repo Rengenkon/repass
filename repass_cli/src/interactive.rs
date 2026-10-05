@@ -24,6 +24,7 @@ fn schema() -> clap::Command {
         .get_subcommands()
         .filter(|command| command.get_name() != "interactive")
         .cloned()
+        .map(hide_data_dir)
         .collect();
     let mut command = clap::Command::new("repass")
         .about("Session commands; use vault switch <DIR> to select a vault")
@@ -32,7 +33,8 @@ fn schema() -> clap::Command {
         .subcommands(subcommands)
         .mut_subcommand("vault", |vault| {
             vault.mut_subcommand("switch", |switch| switch.hide(false))
-        });
+        })
+        .mut_subcommand("warnings", |warnings| warnings.hide(false));
     command.build();
     command = command.mut_subcommand("help", |help| help.visible_alias("h"));
     command.build();
@@ -43,6 +45,27 @@ fn optional_arguments(command: clap::Command) -> clap::Command {
     command
         .mut_args(|arg| arg.required(false))
         .mut_subcommands(optional_arguments)
+}
+
+fn hide_data_dir(command: clap::Command) -> clap::Command {
+    command
+        .mut_args(|arg| {
+            if arg.get_id().as_str() == "data_dir" {
+                arg.hide(true)
+            } else {
+                arg
+            }
+        })
+        .mut_subcommands(hide_data_dir)
+}
+
+fn uses_data_dir(command: &Command) -> bool {
+    match command {
+        Command::Vault { data_dir, .. }
+        | Command::Record { data_dir, .. }
+        | Command::Tag { data_dir, .. } => data_dir.is_some(),
+        _ => false,
+    }
 }
 
 struct Missing {
@@ -130,8 +153,8 @@ fn parse(words: Vec<String>, input: &mut impl BufRead, output: &mut impl Write) 
     }
     let matches = strict.try_get_matches_from(arguments)?;
     let command = Line::from_arg_matches(&matches)?.command;
-    if let Command::Generate(args) = &command {
-        args.validate()?;
+    if uses_data_dir(&command) {
+        return Err("interactive commands cannot override the session data directory".into());
     }
     Ok(command)
 }
@@ -300,7 +323,8 @@ mod tests {
         assert!(matches!(
             command,
             Command::Tag {
-                command: commands::TagCommand::Delete { tag_id: 42 }
+                command: commands::TagCommand::Delete { tag_id: 42 },
+                ..
             }
         ));
     }
@@ -318,7 +342,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(command, Command::Record { command: commands::RecordCommand::Add { name, password_stdin: true, .. } } if name == "My mail")
+            matches!(command, Command::Record { command: commands::RecordCommand::Add { name, password_stdin: true, .. }, .. } if name == "My mail")
         );
     }
 
@@ -337,6 +361,15 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn interactive_storage_help_hides_data_directory_override() {
+        let error = schema()
+            .try_get_matches_from(["repass", "help", "record", "list"])
+            .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert!(!error.to_string().contains("--data-dir"));
     }
 
     #[test]

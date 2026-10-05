@@ -43,6 +43,7 @@ fn expand(path: PathBuf, home: Option<OsString>) -> Result<PathBuf> {
 pub struct Session {
     data_dir: PathBuf,
     storage: Option<Storage>,
+    warnings_enabled: bool,
 }
 
 impl Session {
@@ -50,6 +51,7 @@ impl Session {
         Self {
             data_dir,
             storage: None,
+            warnings_enabled: true,
         }
     }
 
@@ -58,11 +60,20 @@ impl Session {
         Self {
             data_dir,
             storage: Some(storage),
+            warnings_enabled: true,
         }
     }
 
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    pub fn warnings_enabled(&self) -> bool {
+        self.warnings_enabled
+    }
+
+    pub fn set_warnings_enabled(&mut self, enabled: bool) {
+        self.warnings_enabled = enabled;
     }
 
     pub fn ensure_storage(

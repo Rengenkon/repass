@@ -23,9 +23,6 @@ use std::str::FromStr;
     styles = output::styles()
 )]
 pub struct Cli {
-    /// Data directory (overrides REPASS_DATA_DIR; default: $HOME/.repass)
-    #[arg(long, global = true, value_hint = ValueHint::DirPath)]
-    pub data_dir: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -36,21 +33,36 @@ pub enum Command {
     Generate(GenerateArgs),
     /// Initialize or inspect a vault
     Vault {
+        /// Data directory (overrides REPASS_DATA_DIR; default: $HOME/.repass)
+        #[arg(long, global = true, value_hint = ValueHint::DirPath)]
+        data_dir: Option<PathBuf>,
         #[command(subcommand)]
         command: VaultCommand,
     },
     /// Manage records using stable IDs
     Record {
+        /// Data directory (overrides REPASS_DATA_DIR; default: $HOME/.repass)
+        #[arg(long, global = true, value_hint = ValueHint::DirPath)]
+        data_dir: Option<PathBuf>,
         #[command(subcommand)]
         command: RecordCommand,
     },
     /// Manage tags using stable IDs
     Tag {
+        /// Data directory (overrides REPASS_DATA_DIR; default: $HOME/.repass)
+        #[arg(long, global = true, value_hint = ValueHint::DirPath)]
+        data_dir: Option<PathBuf>,
         #[command(subcommand)]
         command: TagCommand,
     },
     /// Start a persistent interactive session
-    Interactive,
+    Interactive(InteractiveArgs),
+    /// Configure session warning output
+    #[command(hide = true)]
+    Warnings {
+        #[command(subcommand)]
+        command: Option<WarningsCommand>,
+    },
     /// Print a shell completion script to stdout
     Completions {
         #[arg(value_enum)]
@@ -70,7 +82,7 @@ pub struct GenerateArgs {
     /// UTF-8 dictionary, one entry per line; default: all built-in character sets
     #[arg(long, value_hint = ValueHint::FilePath)]
     pub dictionary: Option<PathBuf>,
-    /// Separator text; default: "-"; not applicable to none
+    /// Separator text; default: "-"; ignored by none
     #[arg(long, allow_hyphen_values = true, value_parser = nonempty_separator)]
     pub separator: Option<String>,
     /// Unicode scalar interval for fixed-interval (default: 5)
@@ -79,6 +91,25 @@ pub struct GenerateArgs {
     /// Number of insertions for fixed-count (default: 3; reduced on short content)
     #[arg(long, value_parser = positive_usize)]
     pub separator_count: Option<usize>,
+    /// Show warnings for separator options ignored by the selected strategy
+    #[arg(long, conflicts_with = "no_warnings")]
+    pub warnings: bool,
+    /// Do not show warnings for separator options ignored by the selected strategy
+    #[arg(long, conflicts_with = "warnings")]
+    pub no_warnings: bool,
+}
+
+#[derive(Args, Default)]
+pub struct InteractiveArgs {
+    /// Data directory (overrides REPASS_DATA_DIR; default: $HOME/.repass)
+    #[arg(long, value_hint = ValueHint::DirPath)]
+    pub data_dir: Option<PathBuf>,
+    /// Enable warnings in this interactive session
+    #[arg(long, conflicts_with = "no_warnings")]
+    pub warnings: bool,
+    /// Disable warnings in this interactive session
+    #[arg(long, conflicts_with = "warnings")]
+    pub no_warnings: bool,
 }
 
 pub const SEPARATOR_HELP: &str = "Separator strategy (required; enter a name or number):
@@ -99,6 +130,14 @@ pub enum SeparatorKind {
     FixedCount,
 }
 
+#[derive(Subcommand)]
+pub enum WarningsCommand {
+    /// Enable warnings for this session
+    On,
+    /// Disable warnings for this session
+    Off,
+}
+
 fn nonempty_separator(value: &str) -> std::result::Result<String, String> {
     if value.is_empty() {
         Err("separator must not be empty; use --separator-kind none to disable separation".into())
@@ -108,18 +147,20 @@ fn nonempty_separator(value: &str) -> std::result::Result<String, String> {
 }
 
 impl GenerateArgs {
-    pub fn validate(&self) -> Result<()> {
-        if self.separator_kind == SeparatorKind::None && self.separator.is_some() {
-            return Err("--separator is not applicable to --separator-kind none (1)".into());
+    fn warnings_enabled(&self, default: bool) -> bool {
+        if self.warnings {
+            true
+        } else if self.no_warnings {
+            false
+        } else {
+            default
         }
-        if self.separator_interval.is_some() && self.separator_kind != SeparatorKind::FixedInterval
-        {
-            return Err("--separator-interval requires --separator-kind fixed-interval (3)".into());
-        }
-        if self.separator_count.is_some() && self.separator_kind != SeparatorKind::FixedCount {
-            return Err("--separator-count requires --separator-kind fixed-count (4)".into());
-        }
-        Ok(())
+    }
+}
+
+impl InteractiveArgs {
+    pub fn warnings_enabled(&self) -> bool {
+        !self.no_warnings
     }
 }
 
@@ -212,8 +253,12 @@ pub enum TagCommand {
     Recover,
 }
 
-pub fn generate(args: GenerateArgs) -> Result<Vec<String>> {
-    args.validate()?;
+pub fn generate(args: GenerateArgs, default_warnings: bool) -> Result<(Vec<String>, Vec<String>)> {
+    let warnings = if args.warnings_enabled(default_warnings) {
+        ignored_separator_options(&args)
+    } else {
+        Vec::new()
+    };
     let dictionary = match args.dictionary {
         Some(path) => DictionaryCache::new(FileDictionary::from_path(path)?)?,
         None => DictionaryCache::new(presets::all_presets())?,
@@ -232,7 +277,38 @@ pub fn generate(args: GenerateArgs) -> Result<Vec<String>> {
         )),
     };
     let query = Query::new(PasswordLength::Exact(args.length), &dictionary, &*separator)?;
-    Ok(generate_multi(&query, args.count)?)
+    Ok((generate_multi(&query, args.count)?, warnings))
+}
+
+fn ignored_separator_options(args: &GenerateArgs) -> Vec<String> {
+    let mut ignored = Vec::new();
+    if args.separator_kind == SeparatorKind::None && args.separator.is_some() {
+        ignored.push("--separator");
+    }
+    if args.separator_interval.is_some() && args.separator_kind != SeparatorKind::FixedInterval {
+        ignored.push("--separator-interval");
+    }
+    if args.separator_count.is_some() && args.separator_kind != SeparatorKind::FixedCount {
+        ignored.push("--separator-count");
+    }
+    ignored
+        .into_iter()
+        .map(|option| {
+            format!(
+                "{option} is ignored for separator strategy {}",
+                separator_kind_name(args.separator_kind)
+            )
+        })
+        .collect()
+}
+
+fn separator_kind_name(kind: SeparatorKind) -> &'static str {
+    match kind {
+        SeparatorKind::None => "none",
+        SeparatorKind::BetweenParts => "between-parts",
+        SeparatorKind::FixedInterval => "fixed-interval",
+        SeparatorKind::FixedCount => "fixed-count",
+    }
 }
 
 pub fn execute(
@@ -244,7 +320,11 @@ pub fn execute(
 ) -> Result<()> {
     match command {
         Command::Generate(args) => {
-            for password in generate(args)? {
+            let (passwords, warnings) = generate(args, session.warnings_enabled())?;
+            for warning in warnings {
+                output::warning(output, warning)?;
+            }
+            for password in passwords {
                 writeln!(output, "{password}")?;
             }
             Ok(())
@@ -252,6 +332,7 @@ pub fn execute(
         Command::Completions { shell } => crate::completions::generate(shell, output),
         Command::Vault {
             command: VaultCommand::Switch { dir },
+            ..
         } if interactive => {
             session.switch(dir)?;
             output::styled(output, output::SUCCESS, "Data directory:")?;
@@ -260,10 +341,32 @@ pub fn execute(
         }
         Command::Vault {
             command: VaultCommand::Switch { .. },
+            ..
         } => Err("vault switch is available only in interactive mode".into()),
-        Command::Interactive => Err("already in interactive mode".into()),
+        Command::Interactive(_) => Err("already in interactive mode".into()),
+        Command::Warnings { command } => {
+            if !interactive {
+                return Err("warnings is available only in interactive mode".into());
+            }
+            match command {
+                Some(WarningsCommand::On) => session.set_warnings_enabled(true),
+                Some(WarningsCommand::Off) => session.set_warnings_enabled(false),
+                None => {}
+            }
+            writeln!(
+                output,
+                "Warnings: {}",
+                if session.warnings_enabled() {
+                    "on"
+                } else {
+                    "off"
+                }
+            )?;
+            Ok(())
+        }
         Command::Vault {
             command: VaultCommand::Init,
+            ..
         } => {
             session.initialize_storage(output, interactive)?;
             success(
@@ -273,6 +376,7 @@ pub fn execute(
         }
         Command::Vault {
             command: VaultCommand::Info,
+            ..
         } => {
             let storage = session.ensure_storage(output, interactive)?;
             let info = storage.info();
@@ -293,8 +397,10 @@ pub fn execute(
             }
             Ok(())
         }
-        Command::Record { command } => execute_record(command, session, input, output, interactive),
-        Command::Tag { command } => execute_tag(command, session, output, interactive),
+        Command::Record { command, .. } => {
+            execute_record(command, session, input, output, interactive)
+        }
+        Command::Tag { command, .. } => execute_tag(command, session, output, interactive),
     }
 }
 
@@ -571,6 +677,7 @@ mod tests {
         let mut output = Vec::new();
         execute(
             Command::Record {
+                data_dir: None,
                 command: RecordCommand::Add {
                     name: "mail".into(),
                     password_stdin: true,
@@ -593,6 +700,7 @@ mod tests {
         let mut masked = Vec::new();
         execute(
             Command::Record {
+                data_dir: None,
                 command: RecordCommand::Show {
                     record_id: "1".into(),
                     reveal: false,
@@ -611,6 +719,7 @@ mod tests {
         let mut revealed = Vec::new();
         execute(
             Command::Record {
+                data_dir: None,
                 command: RecordCommand::Show {
                     record_id: "1".into(),
                     reveal: true,
@@ -651,6 +760,7 @@ mod tests {
         let mut session = Session::with_storage(directory.0.clone(), storage);
         execute(
             Command::Tag {
+                data_dir: None,
                 command: TagCommand::Rename {
                     tag_id,
                     name: "new".into(),
@@ -672,6 +782,7 @@ mod tests {
         let mut output = Vec::new();
         execute(
             Command::Tag {
+                data_dir: None,
                 command: TagCommand::Recover,
             },
             &mut session,

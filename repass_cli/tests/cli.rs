@@ -123,21 +123,7 @@ fn invalid_separator_options_are_rejected() {
         vec!["--separator-kind", "0"],
         vec!["--separator-kind", "5"],
         vec!["--separator-kind", "unknown"],
-        vec!["--separator-kind", "none", "--separator", "-"],
         vec!["--separator-kind", "between-parts", "--separator", ""],
-        vec!["--separator-kind", "none", "--separator-interval", "2"],
-        vec![
-            "--separator-kind",
-            "fixed-interval",
-            "--separator-count",
-            "2",
-        ],
-        vec![
-            "--separator-kind",
-            "fixed-count",
-            "--separator-interval",
-            "2",
-        ],
         vec![
             "--separator-kind",
             "fixed-interval",
@@ -153,6 +139,107 @@ fn invalid_separator_options_are_rejected() {
             .unwrap();
         assert!(!output.status.success(), "{options:?}");
         assert!(!output.stderr.is_empty());
+    }
+}
+
+#[test]
+fn ignored_separator_options_warn_by_default_and_can_be_suppressed() {
+    let mut command = cli();
+    let output = command
+        .args([
+            "generate",
+            "--length",
+            "13",
+            "--separator-kind",
+            "none",
+            "--separator",
+            "::",
+            "--separator-interval",
+            "3",
+            "--separator-count",
+            "2",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .chars()
+            .count(),
+        13
+    );
+    let warnings = String::from_utf8(output.stderr).unwrap();
+    for option in ["--separator", "--separator-interval", "--separator-count"] {
+        assert!(
+            warnings.contains(&format!("{option} is ignored")),
+            "{warnings}"
+        );
+    }
+
+    let output = cli()
+        .args([
+            "generate",
+            "--length",
+            "13",
+            "--separator-kind",
+            "none",
+            "--separator-count",
+            "2",
+            "--no-warnings",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .chars()
+            .count(),
+        13
+    );
+}
+
+#[test]
+fn ignored_options_are_still_type_checked_and_warning_flags_are_exclusive() {
+    for arguments in [
+        vec![
+            "generate",
+            "--length",
+            "13",
+            "--separator-kind",
+            "none",
+            "--separator-interval",
+            "invalid",
+        ],
+        vec![
+            "generate",
+            "--length",
+            "13",
+            "--separator-kind",
+            "none",
+            "--separator-count",
+            "0",
+        ],
+        vec![
+            "generate",
+            "--length",
+            "13",
+            "--separator-kind",
+            "none",
+            "--warnings",
+            "--no-warnings",
+        ],
+    ] {
+        let output = cli().args(arguments).output().unwrap();
+        assert!(!output.status.success());
     }
 }
 
@@ -248,6 +335,37 @@ fn explicit_interactive_entrypoint_continues_after_password_prompt_errors() {
 }
 
 #[test]
+fn interactive_warning_setting_is_inherited_and_can_be_overridden_per_generation() {
+    let mut child = cli()
+        .args(["interactive", "--no-warnings"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            b"generate --length 13 --separator-kind none --separator-count 2\nwarnings\ngenerate --length 13 --separator-kind none --separator-count 2 --warnings\nwarnings\ngenerate --length 13 --separator-kind none --separator-count 2\nwarnings on\ngenerate --length 13 --separator-kind none --separator-count 2\nwarnings off\ngenerate --length 13 --separator-kind none --separator-count 2\nquit\n",
+        )
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        text.matches("--separator-count is ignored").count(),
+        2,
+        "{text}"
+    );
+    assert!(text.contains("Warnings: off"));
+    assert!(text.contains("Warnings: on"));
+    assert!(text.contains("--separator-count is ignored for separator strategy none"));
+}
+
+#[test]
 fn no_command_prints_help_without_starting_or_resolving_a_session() {
     let output = cli()
         .env_remove("HOME")
@@ -262,6 +380,42 @@ fn no_command_prints_help_without_starting_or_resolving_a_session() {
     assert!(text.contains("interactive"));
     assert!(!text.contains("repass>"));
     assert!(!text.contains("Interactive mode."));
+}
+
+#[test]
+fn data_directory_options_are_scoped_to_storage_commands() {
+    for arguments in [vec!["completions", "--help"], vec!["generate", "--help"]] {
+        let output = cli().args(arguments).output().unwrap();
+        assert!(output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("--data-dir"));
+    }
+
+    let output = cli().args(["record", "list", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("--data-dir"));
+}
+
+#[test]
+fn generation_does_not_resolve_a_data_directory() {
+    let output = cli()
+        .env_remove("HOME")
+        .env("REPASS_DATA_DIR", "")
+        .args(["generate", "--length", "13", "--separator-kind", "none"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .chars()
+            .count(),
+        13
+    );
 }
 
 #[test]
