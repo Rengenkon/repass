@@ -2,20 +2,25 @@ mod commands;
 mod interactive;
 mod session;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use commands::{Cli, Command};
-use std::io;
+use std::io::{self, Write};
 use std::process::ExitCode;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    let Some(command) = cli.command else {
+        Cli::command().print_help()?;
+        writeln!(io::stdout())?;
+        return Ok(());
+    };
     if matches!(
-        cli.command,
-        Some(Command::Vault {
+        command,
+        Command::Vault {
             command: commands::VaultCommand::Switch { .. }
-        })
+        }
     ) {
         return Err("vault switch is available only in interactive mode".into());
     }
@@ -23,11 +28,9 @@ fn run() -> Result<()> {
     let stdin = io::stdin();
     let mut input = stdin.lock();
     let mut output = io::stdout().lock();
-    match cli.command {
-        None | Some(Command::Interactive) => {
-            interactive::run(&mut session, &mut input, &mut output)
-        }
-        Some(command) => commands::execute(command, &mut session, &mut input, &mut output, false),
+    match command {
+        Command::Interactive => interactive::run(&mut session, &mut input, &mut output),
+        command => commands::execute(command, &mut session, &mut input, &mut output, false),
     }
 }
 

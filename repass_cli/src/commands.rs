@@ -1,12 +1,14 @@
 use crate::{Result, session::Session};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use repass_generator::dictionary::{
     cache::DictionaryCache, file_dictionary::FileDictionary, presets,
 };
 use repass_generator::generator::generate_multi;
 use repass_generator::query::{PasswordLength, Query};
 use repass_generator::separator::{
-    Separator, between_parts::BetweenPartsSeparator, without_separator::WithoutSeparator,
+    DEFAULT_SEPARATOR, Separator, between_parts::BetweenPartsSeparator,
+    fixed_count::FixedCountSeparator, fixed_interval::FixedIntervalSeparator,
+    without_separator::WithoutSeparator,
 };
 use repass_storage::tags::TagId;
 use std::io::{BufRead, Write};
@@ -45,7 +47,7 @@ pub enum Command {
         #[command(subcommand)]
         command: TagCommand,
     },
-    /// Start a persistent interactive session (also the default without a command)
+    /// Start a persistent interactive session
     Interactive,
 }
 
@@ -54,14 +56,64 @@ pub struct GenerateArgs {
     /// Exact length in Unicode scalar values, including separators
     #[arg(long, value_parser = positive_usize)]
     pub length: usize,
+    #[arg(long, value_enum, hide_possible_values = true, help = SEPARATOR_HELP)]
+    pub separator_kind: SeparatorKind,
     #[arg(long, default_value = "1", value_parser = positive_usize)]
     pub count: usize,
     /// UTF-8 dictionary, one entry per line; default: all built-in character sets
     #[arg(long)]
     pub dictionary: Option<PathBuf>,
-    /// Separator between entries; default: "-"; empty string disables separation
-    #[arg(long, allow_hyphen_values = true)]
+    /// Separator text; default: "-"; not applicable to none
+    #[arg(long, allow_hyphen_values = true, value_parser = nonempty_separator)]
     pub separator: Option<String>,
+    /// Unicode scalar interval for fixed-interval (default: 5)
+    #[arg(long, value_parser = positive_usize)]
+    pub separator_interval: Option<usize>,
+    /// Number of insertions for fixed-count (default: 3; reduced on short content)
+    #[arg(long, value_parser = positive_usize)]
+    pub separator_count: Option<usize>,
+}
+
+pub const SEPARATOR_HELP: &str = "Separator strategy (required; enter a name or number):
+1. none — join dictionary entries without a separator
+2. between-parts — insert the separator between dictionary entries
+3. fixed-interval — insert after each interval of Unicode scalar values in the content
+4. fixed-count — distribute the requested number of separators across the content";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum SeparatorKind {
+    #[value(alias = "1")]
+    None,
+    #[value(alias = "2")]
+    BetweenParts,
+    #[value(alias = "3")]
+    FixedInterval,
+    #[value(alias = "4")]
+    FixedCount,
+}
+
+fn nonempty_separator(value: &str) -> std::result::Result<String, String> {
+    if value.is_empty() {
+        Err("separator must not be empty; use --separator-kind none to disable separation".into())
+    } else {
+        Ok(value.into())
+    }
+}
+
+impl GenerateArgs {
+    pub fn validate(&self) -> Result<()> {
+        if self.separator_kind == SeparatorKind::None && self.separator.is_some() {
+            return Err("--separator is not applicable to --separator-kind none (1)".into());
+        }
+        if self.separator_interval.is_some() && self.separator_kind != SeparatorKind::FixedInterval
+        {
+            return Err("--separator-interval requires --separator-kind fixed-interval (3)".into());
+        }
+        if self.separator_count.is_some() && self.separator_kind != SeparatorKind::FixedCount {
+            return Err("--separator-count requires --separator-kind fixed-count (4)".into());
+        }
+        Ok(())
+    }
 }
 
 fn positive_usize(value: &str) -> std::result::Result<usize, String> {
@@ -144,14 +196,23 @@ pub enum TagCommand {
 }
 
 pub fn generate(args: GenerateArgs) -> Result<Vec<String>> {
+    args.validate()?;
     let dictionary = match args.dictionary {
         Some(path) => DictionaryCache::new(FileDictionary::from_path(path)?)?,
         None => DictionaryCache::new(presets::all_presets())?,
     };
-    let separator: Box<dyn Separator> = match args.separator.as_deref() {
-        Some("") => Box::new(WithoutSeparator),
-        Some(text) => Box::new(BetweenPartsSeparator::new(text)),
-        None => Box::new(BetweenPartsSeparator::default()),
+    let text = args.separator.as_deref().unwrap_or(DEFAULT_SEPARATOR);
+    let separator: Box<dyn Separator> = match args.separator_kind {
+        SeparatorKind::None => Box::new(WithoutSeparator),
+        SeparatorKind::BetweenParts => Box::new(BetweenPartsSeparator::new(text)),
+        SeparatorKind::FixedInterval => Box::new(FixedIntervalSeparator::new(
+            text,
+            args.separator_interval.unwrap_or(5),
+        )),
+        SeparatorKind::FixedCount => Box::new(FixedCountSeparator::new(
+            text,
+            args.separator_count.unwrap_or(3),
+        )),
     };
     let query = Query::new(PasswordLength::Exact(args.length), &dictionary, &*separator)?;
     Ok(generate_multi(&query, args.count)?)

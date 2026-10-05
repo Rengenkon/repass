@@ -3,7 +3,7 @@
 Run with `cargo run -p repass_cli -- <arguments>` or build the `repass` binary.
 
 ```text
-repass [--data-dir <DIR>] generate --length <N> [--count <N>] [--dictionary <FILE>] [--separator <TEXT>]
+repass [--data-dir <DIR>] generate --length <N> --separator-kind <KIND> [--count <N>] [--dictionary <FILE>] [--separator <TEXT>] [--separator-interval <N>] [--separator-count <N>]
 repass [--data-dir <DIR>] vault init
 repass [--data-dir <DIR>] vault info
 repass [--data-dir <DIR>] record add --name <NAME> --password-stdin [--username <TEXT>] [--url <URL>] [--notes <TEXT>] [--tag <TAG_ID>...]
@@ -21,21 +21,51 @@ repass [--data-dir <DIR>] interactive
 explicit argument, `REPASS_DATA_DIR`, then `$HOME/.repass`. A leading `~` path
 component expands to `$HOME`. An empty selected directory is an error.
 
-`repass` without a command starts interactive mode. Enter the same commands
+`repass` without a command displays help. Use `repass interactive` to start a
+session. Enter the same commands
 without the `repass` prefix; quotes preserve spaces. Missing mandatory arguments
 are prompted. Password input is hidden in the terminal; in a one-shot invocation,
 `--password-stdin` reads one line from stdin (removing its line ending).
-Optional arguments are not prompted. Use `help`, `exit`, `quit`, or EOF.
+Optional arguments are not prompted. Use `h` or `help` for help (including
+`h generate` and `help record add`), and `q`, `quit`, or EOF to leave.
+`exit` is not a supported command.
+The `interactive` command is unavailable and absent from help inside a session.
 
 Inside a session, ordinary commands cannot accept `--data-dir`. Use
 `vault switch <DIR>` to close the old vault and change the session's directory.
 Opening and decryption are lazy; generation and help do not open a vault.
 
-## Current module limitations
+## Separator strategies
 
 Generation works through `repass_generator`. Length means Unicode scalar values,
-including separators. The default dictionary uses all built-in character sets;
-the default separator is `-`. Pass `--separator ''` to disable separation.
+including separators. The default dictionary uses all built-in character sets.
+Both `--length` and `--separator-kind` are mandatory in one-shot mode; the session
+prompts for missing values and displays the numbered strategy list.
+
+Strategies accept either their name or the fixed number shown in help:
+
+1. `none` — join dictionary entries without separators.
+2. `between-parts` — insert separators between dictionary entries.
+3. `fixed-interval` — insert separators after each interval of Unicode scalar
+   values in the content, regardless of dictionary entry boundaries.
+4. `fixed-count` — distribute the requested number of separators across content;
+   short content may reduce the number of insertions.
+
+`--separator` defaults to `-`, must be nonempty, and is inapplicable to `none`.
+`--separator-interval` is a positive integer for `fixed-interval` only (default
+`5`). `--separator-count` is a positive integer for `fixed-count` only (default
+`3`). Unsupported option/strategy combinations are errors. Some exact lengths
+cannot be formed with a chosen dictionary and separator configuration; the
+generator reports an error rather than changing the requested length.
+
+```text
+repass generate --length 16 --separator-kind none
+repass generate --length 16 --separator-kind 2 --separator "::"
+repass generate --length 20 --separator-kind fixed-interval --separator-interval 4
+repass generate --length 20 --separator-kind 4 --separator-count 2
+```
+
+## Current module limitations
 
 Storage commands currently return explanatory TODO errors. `repass_storage`
 already has an owned `Vault` with file-level create/open and document save/load
@@ -48,7 +78,7 @@ enumeration and deletion with reference checks. The existing generic document
 save API replaces all contents and cannot serve as a partial record/tag update.
 
 Once those APIs exist, handlers must retain the owned vault, save each successful
-mutation through the module, and close it on switch/exit. A failed save must
+mutation through the module, and close it on switch or session termination. A failed save must
 retain the current vault. `vault init` must not overwrite an existing vault;
 other storage commands should ask the module to initialize an absent vault.
 No persistence format is defined by this CLI.
