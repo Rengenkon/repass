@@ -1,3 +1,3 @@
 [workspace]
-members = ["repass_generator", "repass_storage"]
+members = ["repass_cli","repass_generator", "repass_storage"]
 resolver = "3"

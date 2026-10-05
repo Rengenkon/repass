@@ -1,0 +1,15 @@
+[package]
+name = "repass_cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "repass"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+repass_generator = { version = "0.1.0", path = "../repass_generator" }
+repass_storage = { version = "0.1.0", path = "../repass_storage" }
+rpassword = "7.5.4"
+shlex = "2.0.1"
