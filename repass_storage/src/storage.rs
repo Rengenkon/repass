@@ -4,6 +4,8 @@ use crate::persistence::{PersistedRecords, PersistedTag, PersistedTags, Vault, V
 use crate::record::types::{Host, Timestamp};
 use crate::record::{NewRecord, RecordId, RecordPatch, RecordView, Records};
 use crate::tags::{Tag, TagId, Tags};
+use frizbee::{CaseMatching, Config, Matcher, UnicodeMatching};
+use std::borrow::Cow;
 use std::fs::{self, File, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -264,6 +266,71 @@ impl Storage {
             }
         }
         Ok(self.records.filtered_views(name, host, tags))
+    }
+
+    /// Fuzzy matching against name, username, host, notes and tag names.
+    /// Each field is matched separately; the best field score ranks the record.
+    /// Results are ordered by descending score, then by stable record ID.
+    /// Exact filters apply before matching. Secret data is never searched.
+    /// Surrounding query whitespace is trimmed; blank queries are rejected.
+    /// Queries of 1–3 Unicode scalars allow no typos, 4–7 allow one, and
+    /// longer queries allow two. Case is ignored and Unicode is enabled.
+    pub fn fuzzy_search_records(
+        &self,
+        query: &str,
+        name: Option<&str>,
+        host: Option<&Host>,
+        tags: &[TagId],
+    ) -> Result<Vec<RecordView<'_>>, StorageError> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err(StorageError::InvalidState("search query cannot be blank"));
+        }
+        let records = self.search_records_by_host(name, host, tags)?;
+        let mut fields: Vec<Cow<'_, str>> = Vec::new();
+        let mut owners = Vec::new();
+        for (index, record) in records.iter().enumerate() {
+            let start = fields.len();
+            fields.push(Cow::Borrowed(record.name));
+            for field in record.username.into_iter().chain(record.notes) {
+                fields.push(Cow::Borrowed(field));
+            }
+            if let Some(host) = record.host {
+                fields.push(match host {
+                    Host::Domain(domain) => Cow::Borrowed(domain.trim_end_matches('.')),
+                    Host::IP(ip) => Cow::Owned(ip.to_string()),
+                });
+            }
+            for tag in record.tags {
+                if let Some(tag) = self.tags.get(*tag) {
+                    fields.push(Cow::Borrowed(tag.name()));
+                }
+            }
+            owners.extend(std::iter::repeat_n(index, fields.len() - start));
+        }
+        // Frizbee uses u32 candidate indices internally.
+        if fields.len() > u32::MAX as usize {
+            return Err(StorageError::InvalidState("too many searchable fields"));
+        }
+        let config = Config::default()
+            .casing(CaseMatching::Ignore)
+            .unicode(UnicodeMatching::Always)
+            .max_typos(Some((query.chars().count() / 4).min(2) as u16));
+        let mut matcher = Matcher::new(query, &config);
+        let mut scores: Vec<Option<u16>> = vec![None; records.len()];
+        for matched in matcher.match_list(&fields) {
+            let score = &mut scores[owners[matched.index as usize]];
+            *score = Some(score.map_or(matched.score, |current| current.max(matched.score)));
+        }
+        let mut ranked: Vec<_> = records
+            .into_iter()
+            .zip(scores)
+            .filter_map(|(record, score)| score.map(|score| (record, score)))
+            .collect();
+        ranked.sort_unstable_by(|(a, a_score), (b, b_score)| {
+            b_score.cmp(a_score).then_with(|| a.id.cmp(&b.id))
+        });
+        Ok(ranked.into_iter().map(|(record, _)| record).collect())
     }
 
     pub fn get_record(&self, id: RecordId) -> Result<RecordView<'_>, StorageError> {
@@ -642,6 +709,251 @@ mod tests {
             host: Some("example.test".parse().unwrap()),
             notes: None,
             tags,
+        }
+    }
+
+    #[test]
+    fn fuzzy_search_matches_each_metadata_field_and_supports_unicode_and_typos() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let tag = storage.create_tag("archive").unwrap();
+        let cases = [
+            (
+                "githab",
+                NewRecord {
+                    name: "GitHub".into(),
+                    data: vec![],
+                    username: None,
+                    host: None,
+                    notes: None,
+                    tags: vec![],
+                },
+            ),
+            (
+                "ASTRONAUT",
+                NewRecord {
+                    name: "one".into(),
+                    data: vec![],
+                    username: Some("astronaut".into()),
+                    host: None,
+                    notes: None,
+                    tags: vec![],
+                },
+            ),
+            (
+                "nebula",
+                NewRecord {
+                    name: "two".into(),
+                    data: vec![],
+                    username: None,
+                    host: Some("Nebula.TEST.".parse().unwrap()),
+                    notes: None,
+                    tags: vec![],
+                },
+            ),
+            (
+                "ПОЧТА",
+                NewRecord {
+                    name: "three".into(),
+                    data: vec![],
+                    username: None,
+                    host: None,
+                    notes: Some("Почта".into()),
+                    tags: vec![],
+                },
+            ),
+            (
+                "archive",
+                NewRecord {
+                    name: "four".into(),
+                    data: vec![],
+                    username: None,
+                    host: None,
+                    notes: None,
+                    tags: vec![tag],
+                },
+            ),
+            (
+                "192.0.2.42",
+                NewRecord {
+                    name: "five".into(),
+                    data: vec![],
+                    username: None,
+                    host: Some("192.0.2.42".parse().unwrap()),
+                    notes: None,
+                    tags: vec![],
+                },
+            ),
+            (
+                "RÉSUMÉ",
+                NewRecord {
+                    name: "résumé".into(),
+                    data: vec![],
+                    username: None,
+                    host: None,
+                    notes: None,
+                    tags: vec![],
+                },
+            ),
+            (
+                "猫猫",
+                NewRecord {
+                    name: "猫猫".into(),
+                    data: vec![],
+                    username: None,
+                    host: None,
+                    notes: None,
+                    tags: vec![],
+                },
+            ),
+        ];
+        let mut expected = Vec::new();
+        for (query, record) in cases {
+            expected.push((query, storage.create_record(record).unwrap()));
+        }
+        for (query, id) in expected {
+            let matches = storage
+                .fuzzy_search_records(query, None, None, &[])
+                .unwrap();
+            assert!(matches.iter().any(|record| record.id == id), "{query}");
+            assert_eq!(matches.iter().filter(|record| record.id == id).count(), 1);
+        }
+        assert!(
+            storage
+                .fuzzy_search_records("z", None, None, &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            storage
+                .fuzzy_search_records("猫犬", None, None, &[])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn fuzzy_search_ranks_best_field_once_and_combines_exact_filters() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let a = storage.create_tag("work").unwrap();
+        let b = storage.create_tag("personal").unwrap();
+        let weak = storage.create_record(record("a_l_p_h_a", vec![a])).unwrap();
+        let strong = storage.create_record(record("alpha", vec![a, b])).unwrap();
+        let tie = storage.create_record(record("alpha", vec![a])).unwrap();
+        let mut multi = record("alpha", vec![a]);
+        multi.username = Some("alpha".into());
+        multi.notes = Some("alpha".into());
+        let multi = storage.create_record(multi).unwrap();
+        let ranked = storage
+            .fuzzy_search_records(" alpha ", None, None, &[])
+            .unwrap();
+        assert_eq!(
+            ranked.iter().map(|record| record.id).collect::<Vec<_>>(),
+            vec![strong, tie, multi, weak]
+        );
+        let matches = storage
+            .fuzzy_search_records(
+                "alpha",
+                Some("alpha"),
+                Some(&"EXAMPLE.TEST.".parse().unwrap()),
+                &[a, b],
+            )
+            .unwrap();
+        assert_eq!(
+            matches.iter().map(|record| record.id).collect::<Vec<_>>(),
+            vec![strong]
+        );
+        assert!(
+            storage
+                .fuzzy_search_records("alpha", Some("Alpha"), None, &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            storage
+                .fuzzy_search_records("alpha", None, Some(&"other.test".parse().unwrap()), &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(matches!(
+            storage.fuzzy_search_records("alpha", None, None, &[TagId::new(999)]),
+            Err(StorageError::TagNotFound(_))
+        ));
+        storage.delete_record(strong).unwrap();
+        assert_eq!(
+            storage
+                .fuzzy_search_records("alpha", None, None, &[])
+                .unwrap()
+                .iter()
+                .map(|record| record.id)
+                .collect::<Vec<_>>(),
+            vec![tie, multi, weak]
+        );
+        storage.rename_tag(a, "renamed-catalog").unwrap();
+        assert_eq!(
+            storage
+                .fuzzy_search_records("renamed-catalog", None, None, &[])
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn fuzzy_search_does_not_match_secret_data_or_join_separate_fields() {
+        use crate::{Data, SshKey, Totp, TotpAlgorithm};
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        for query in ["", " \t\n"] {
+            assert!(
+                storage
+                    .fuzzy_search_records(query, None, None, &[])
+                    .is_err()
+            );
+        }
+        assert!(
+            storage
+                .fuzzy_search_records("anything", None, None, &[])
+                .unwrap()
+                .is_empty()
+        );
+        storage
+            .create_record(NewRecord {
+                name: "abc".into(),
+                username: Some("def".into()),
+                host: None,
+                notes: None,
+                tags: vec![],
+                data: vec![
+                    Data::Password("passwordsecret".into()),
+                    Data::SshKey(
+                        SshKey::new(
+                            Some("privatesecret\n".into()),
+                            Some("publicsecret\n".into()),
+                        )
+                        .unwrap(),
+                    ),
+                    Data::Totp(Totp::new("MZXW6YTB".into(), TotpAlgorithm::Sha1, 6, 30).unwrap()),
+                    Data::Code("recoverysecret".into()),
+                ],
+            })
+            .unwrap();
+        for query in [
+            "passwordsecret",
+            "privatesecret",
+            "publicsecret",
+            "MZXW6YTB",
+            "recoverysecret",
+            "abcdef",
+        ] {
+            assert!(
+                storage
+                    .fuzzy_search_records(query, None, None, &[])
+                    .unwrap()
+                    .is_empty(),
+                "{query}"
+            );
         }
     }
 

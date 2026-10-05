@@ -172,6 +172,21 @@ fn update_clear_flags_conflict_with_setting_the_same_optional_field() {
 }
 
 #[test]
+fn blank_fuzzy_queries_are_rejected_before_opening_a_vault() {
+    for query in ["", " \t "] {
+        let output = cli()
+            .args(["record", "find", "--query", query])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("search query cannot be blank"));
+        assert!(!error.contains("Master password:"));
+    }
+}
+
+#[test]
 fn all_separator_names_and_numbers_generate_with_exact_length() {
     let dictionary = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unicode.txt");
     for (name, number) in [
@@ -548,6 +563,7 @@ fn shell_completion_scripts_include_commands_flags_and_separator_aliases() {
             "separator-kind",
             "dictionary",
             "data-dir",
+            "query",
             "between-parts",
             "fixed-count",
             "rename",

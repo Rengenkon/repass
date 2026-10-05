@@ -38,9 +38,31 @@ pub(super) fn execute_record(
                 })?;
             success(output, format_args!("Record created with ID {id}"))
         }
-        RecordCommand::List { tag, name, host } | RecordCommand::Find { tag, name, host } => {
+        RecordCommand::List { tag, name, host } => execute_record(
+            RecordCommand::Find {
+                tag,
+                name,
+                host,
+                query: None,
+            },
+            session,
+            input,
+            output,
+            interactive,
+        ),
+        RecordCommand::Find {
+            tag,
+            name,
+            host,
+            query,
+        } => {
             let storage = session.ensure_storage(output, interactive)?;
-            let records = storage.search_records_by_host(name.as_deref(), host.as_ref(), &tag)?;
+            let records = match query {
+                Some(query) => {
+                    storage.fuzzy_search_records(&query, name.as_deref(), host.as_ref(), &tag)?
+                }
+                None => storage.search_records_by_host(name.as_deref(), host.as_ref(), &tag)?,
+            };
             for record in records {
                 let tag_names = record
                     .tags

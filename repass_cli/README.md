@@ -11,7 +11,7 @@ repass vault [--data-dir <DIR>] recover
 repass vault [--data-dir <DIR>] finish-init
 repass record [--data-dir <DIR>] add --name <NAME> [<DATA_SOURCE>] [--username <TEXT>] [--host <HOST>] [--notes <TEXT>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] list [--name <NAME>] [--host <HOST>] [--tag <TAG_ID>...]
-repass record [--data-dir <DIR>] find [--name <NAME>] [--host <HOST>] [--tag <TAG_ID>...]
+repass record [--data-dir <DIR>] find [--query <TEXT>] [--name <NAME>] [--host <HOST>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] show <RECORD_ID> [--reveal]
 repass record [--data-dir <DIR>] update <RECORD_ID> [--name <NAME>] [--username <TEXT> | --clear-username] [--host <HOST> | --clear-host] [--notes <TEXT> | --clear-notes] [--password-stdin] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
 repass record [--data-dir <DIR>] delete <RECORD_ID>
@@ -92,6 +92,29 @@ the only password. With multiple passwords, use `data-update` and its data ID.
 protocol, port or path. Host filters combine with exact names and tag
 intersection. IP addresses compare by their parsed value; domains compare
 case-insensitively, ignoring a trailing dot. No DNS lookup is performed.
+
+### Fuzzy search
+
+`record find --query <TEXT>` uses `frizbee` to match the name, username, host,
+notes and tag names. Each field is matched separately; a record is returned
+once, ranked by its best field score. Results are ordered by descending score,
+then by stable record ID. Matching ignores case and supports Unicode.
+
+Query length is measured in Unicode scalar values: 1–3 scalars allow no typos,
+4–7 allow one, and longer queries allow up to two. Noncontiguous characters can
+match, so abbreviations are supported even when no typos are allowed. Leading
+and trailing query whitespace is trimmed; blank queries are rejected. Query
+text is a single fuzzy pattern, with no special operator syntax.
+
+Combine `--query` with exact `--name`, `--host` and tag-intersection filters:
+
+```text
+repass record find --query githab
+repass record find --query alice --host example.test --tag 1 2
+```
+
+The same syntax works in interactive sessions. Without `--query`, `find`
+uses exact filters and orders results by ID. Secret values are not searched.
 
 Examples (master-password input is handled separately by the CLI):
 

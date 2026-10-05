@@ -241,8 +241,11 @@ pub enum RecordCommand {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Find records by exact name and/or every requested tag
+    /// Find records by fuzzy text and/or exact name, host and tag filters
     Find {
+        /// Fuzzy search across name, username, host, notes and tag names
+        #[arg(long, value_parser = nonblank_query)]
+        query: Option<String>,
         #[arg(long)]
         host: Option<Host>,
         #[arg(long)]
@@ -300,6 +303,14 @@ pub enum RecordCommand {
         record_id: String,
         data_id: DataId,
     },
+}
+
+fn nonblank_query(value: &str) -> std::result::Result<String, String> {
+    let query = value.trim();
+    if query.is_empty() {
+        return Err("search query cannot be blank".into());
+    }
+    Ok(query.to_owned())
 }
 
 #[derive(Clone, Copy, Default, ValueEnum)]
@@ -857,6 +868,7 @@ mod tests {
             Command::Record {
                 data_dir: None,
                 command: RecordCommand::Find {
+                    query: None,
                     host: None,
                     name: Some("wanted".into()),
                     tag: vec![a, b],
@@ -891,6 +903,51 @@ mod tests {
             interactive,
         )?;
         Ok(String::from_utf8(output).unwrap())
+    }
+
+    #[test]
+    fn fuzzy_find_uses_ranked_metadata_matches_and_combines_filters() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let tag = storage.create_tag("work").unwrap();
+        let make = |name: &str, tags| NewRecord {
+            name: name.into(),
+            data: vec![Data::Password("secret-only-value".into())],
+            username: None,
+            host: Some("example.test".parse().unwrap()),
+            notes: None,
+            tags,
+        };
+        storage.create_record(make("a_l_p_h_a", vec![tag])).unwrap();
+        storage.create_record(make("alpha", vec![tag])).unwrap();
+        storage.create_record(make("alpha", vec![])).unwrap();
+        let mut session = Session::with_storage(directory.0.clone(), storage);
+        let result = run_record_line("find --query ALPHA", "", &mut session, false).unwrap();
+        let ids: Vec<_> = result
+            .lines()
+            .map(|line| line.split('\t').next().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["2", "3", "1"]);
+        assert!(!result.contains("secret-only-value"));
+        let result = run_record_line(
+            &format!("find --query alpha --name alpha --host EXAMPLE.TEST. --tag {tag}"),
+            "",
+            &mut session,
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.lines().count(), 1);
+        assert!(result.starts_with("2\t"));
+        assert!(
+            run_record_line("find --query secret-only-value", "", &mut session, false)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(run_record_line("find --query '   '", "", &mut session, false).is_err());
+        assert_eq!(
+            run_record_line("find --query alpha", "", &mut session, true).unwrap(),
+            run_record_line("find --query alpha", "", &mut session, false).unwrap()
+        );
     }
 
     #[test]
