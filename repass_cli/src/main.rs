@@ -4,6 +4,7 @@ mod input;
 mod interactive;
 mod output;
 mod session;
+mod totp;
 
 use clap::{CommandFactory, Parser};
 use commands::{Cli, Command};

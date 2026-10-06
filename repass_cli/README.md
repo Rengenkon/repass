@@ -32,7 +32,7 @@ repass vault [--data-dir <DIR>] finish-init
 repass record [--data-dir <DIR>] create <NAME> [<DATA_SOURCE>] [--username <TEXT>] [--host <HOST>] [--notes <TEXT>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] list [--name <NAME>] [--host <HOST>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] find [--query <TEXT>] [--name <NAME>] [--host <HOST>] [--tag <TAG_ID>...]
-repass record [--data-dir <DIR>] show <RECORD_ID> [--reveal] [--data-id <ID>] [--raw [--ssh-part private|public]]
+repass record [--data-dir <DIR>] show <RECORD_ID> [--data-id <ID>] [--reveal] [--raw [--ssh-part private|public]] [--totp-code]
 repass record [--data-dir <DIR>] update <RECORD_ID> [--name <NAME>] [--username <TEXT> | --remove-username] [--host <HOST> | --remove-host] [--notes <TEXT> | --remove-notes] [<DATA_SOURCE>] [--replace-data <DATA_ID>] [--remove-data <DATA_ID>...] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
 repass record [--data-dir <DIR>] remove <RECORD_ID>
 repass tag [--data-dir <DIR>] create <NAME>
@@ -99,6 +99,22 @@ repass record show 1 --data-id 3 --raw --ssh-part private > id_ed25519
 repass record show --record-id 1 --data-id 3 --raw --ssh-part public
 ```
 
+Use `--totp-code --data-id <ID>` to generate the selected TOTP element's
+current code. Output is only the code and a newline, preserving leading zeros;
+the Base32 secret is not revealed. This mode conflicts with `--raw`, `--reveal`
+and `--ssh-part`, and selecting a non-TOTP element is an error.
+
+```sh
+repass record show 1 --data-id 4 --totp-code
+repass record show --record-id 1 --data-id 4 --totp-code
+```
+
+Generation uses RFC 6238 with `T0 = 0`, the saved algorithm, digit count and
+period, and the system clock in Unix seconds. The local timezone does not
+affect the code; correct system time is needed to match the service's code.
+Each invocation calculates one current code without changing the record or
+its timestamps. Master-password input works as for other storage commands.
+
 `<DATA_SOURCE>` selects one type per operation:
 
 ```text
@@ -110,9 +126,9 @@ repass record show --record-id 1 --data-id 3 --raw --ssh-part public
 
 One-shot passwords, codes and TOTP secrets consume one stdin line, removing its
 line ending. TOTP secrets must be uppercase RFC 4648 Base32, either unpadded or
-with canonical padding. Defaults are SHA-1, 6 digits and a 30-second period;
-periods must be positive. This release stores configuration only and does not
-calculate one-time codes.
+with canonical padding; new values are stored without padding. Defaults are
+SHA-1, 6 digits and a 30-second period; periods must be positive. Configuration
+is stored in the vault; codes are computed on demand by `show --totp-code`.
 
 SSH values contain a private key, a public key, or both. At least one field is
 required and supplied fields cannot be blank. Files must be UTF-8. Key text,

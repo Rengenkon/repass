@@ -383,6 +383,12 @@ pub enum RecordCommand {
         /// Select the SSH key part for raw output; fails if that part is absent
         #[arg(long, value_enum, requires = "raw")]
         ssh_part: Option<SshPart>,
+        /// Output only the selected TOTP element's current code and a newline
+        ///
+        /// Uses the system clock, saved algorithm, digits and period. Requires
+        /// --data-id; does not reveal the Base32 secret or modify the record.
+        #[arg(long, requires = "data_id", conflicts_with_all = ["raw", "reveal", "ssh_part"])]
+        totp_code: bool,
     },
     /// Change record fields, tags and data elements in one operation
     ///
@@ -480,8 +486,9 @@ pub struct DataInput {
     pub code_stdin: bool,
     /// Read an uppercase Base32 TOTP secret from a stdin line
     ///
-    /// Accepts unpadded Base32 or canonical padding. Stores configuration only;
-    /// no one-time codes are calculated. Defaults: SHA-1, 6 digits, 30 seconds.
+    /// Accepts unpadded Base32 or canonical padding; saves without padding.
+    /// Use record show --data-id ID --totp-code to generate the current code.
+    /// Defaults: SHA-1, 6 digits, 30 seconds.
     #[arg(long, help_heading = "TOTP", conflicts_with_all = ["private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"])]
     pub totp_stdin: bool,
     /// TOTP algorithm (default: sha1; requires --totp-stdin)
@@ -787,6 +794,7 @@ mod tests {
                     data_id: None,
                     raw: false,
                     ssh_part: None,
+                    totp_code: false,
                 },
             },
             &mut session,
@@ -813,6 +821,7 @@ mod tests {
                     data_id: None,
                     raw: false,
                     ssh_part: None,
+                    totp_code: false,
                 },
             },
             &mut session,
@@ -1341,6 +1350,103 @@ mod tests {
             words.extend(args);
             assert!(Cli::try_parse_from(words).is_err());
         }
+    }
+
+    #[test]
+    fn totp_code_output_is_selected_plain_and_does_not_modify_records() {
+        let directory = TestDirectory::new();
+        let storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let mut session = Session::with_storage(directory.0.clone(), storage);
+        run_record_line(
+            "create mail --totp-stdin",
+            "MZXW6YTB\n",
+            &mut session,
+            false,
+        )
+        .unwrap();
+        run_record_line("update 1 --code-stdin", "recovery\n", &mut session, false).unwrap();
+        let before = fs::read(directory.0.join("records.repass")).unwrap();
+        let config = repass_storage::Totp::new(
+            "MZXW6YTB".into(),
+            repass_storage::TotpAlgorithm::Sha1,
+            6,
+            30,
+        )
+        .unwrap();
+        for interactive in [false, true] {
+            let start = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let code = run_record_line(
+                "show --record-id 1 --data-id 1 --totp-code",
+                "",
+                &mut session,
+                interactive,
+            )
+            .unwrap();
+            let end = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            assert_eq!(code.len(), 7);
+            assert!(code.ends_with('\n'));
+            assert!(code[..6].bytes().all(|byte| byte.is_ascii_digit()));
+            assert!(
+                (start..=end).any(|time| code
+                    == format!("{}\n", crate::totp::generate_at(&config, time).unwrap()))
+            );
+        }
+        for line in [
+            "show 1 --data-id 2 --totp-code",
+            "show 1 --data-id 999 --totp-code",
+        ] {
+            let command =
+                Cli::try_parse_from(shlex::split(&format!("repass record {line}")).unwrap())
+                    .unwrap()
+                    .command
+                    .unwrap();
+            let mut output = Vec::new();
+            assert!(
+                execute(
+                    command,
+                    &mut session,
+                    &mut Cursor::new(""),
+                    &mut output,
+                    false
+                )
+                .is_err()
+            );
+            assert!(output.is_empty());
+        }
+        for options in [
+            "--totp-code",
+            "--data-id 1 --totp-code --raw",
+            "--data-id 1 --totp-code --reveal",
+            "--data-id 1 --totp-code --ssh-part public",
+        ] {
+            assert!(
+                Cli::try_parse_from(
+                    shlex::split(&format!("repass record show 1 {options}")).unwrap()
+                )
+                .is_err()
+            );
+        }
+        assert_eq!(
+            fs::read(directory.0.join("records.repass")).unwrap(),
+            before
+        );
+        session.close();
+        let mut session = Session::with_storage(
+            directory.0.clone(),
+            Storage::open_in(&directory.0, b"master").unwrap(),
+        );
+        assert_eq!(
+            run_record_line("show 1 --data-id 1 --totp-code", "", &mut session, false)
+                .unwrap()
+                .len(),
+            7
+        );
     }
 
     #[test]

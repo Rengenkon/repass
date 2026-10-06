@@ -115,7 +115,8 @@ pub enum TotpAlgorithm {
 /// Configuration only; this type does not calculate one-time codes.
 #[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Totp {
-    /// RFC 4648 Base32, uppercase, with optional canonical padding.
+    /// RFC 4648 Base32, uppercase. Constructors strip canonical padding;
+    /// validation also accepts padded values loaded from disk.
     pub secret: String,
     pub algorithm: TotpAlgorithm,
     pub digits: u8,
@@ -129,13 +130,15 @@ impl Totp {
         digits: u8,
         period: u32,
     ) -> Result<Self, StorageError> {
-        let totp = Self {
+        let mut totp = Self {
             secret,
             algorithm,
             digits,
             period,
         };
         totp.validate()?;
+        totp.secret
+            .truncate(totp.secret.trim_end_matches('=').len());
         Ok(totp)
     }
 
@@ -294,6 +297,7 @@ mod tests {
             ] {
                 for digits in 6..=8 {
                     let totp = Totp::new(secret.into(), algorithm, digits, 30).unwrap();
+                    assert_eq!(totp.secret, secret.trim_end_matches('='));
                     let bytes = postcard::to_allocvec(&totp).unwrap();
                     let restored: Totp = postcard::from_bytes(&bytes).unwrap();
                     assert!(restored == totp);

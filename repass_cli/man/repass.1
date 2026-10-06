@@ -185,7 +185,7 @@ best field score. Order by descending score, then ID.
 Secret data values are never searched.
 Without a query, use exact filters and order by ID.
 .TP
-.B record show RECORD_ID [\-\-reveal] [\-\-data-id ID] [\-\-raw [\-\-ssh-part private|public]]
+.B record show RECORD_ID [\-\-data-id ID] [\-\-reveal] [\-\-raw [\-\-ssh-part private|public]] [\-\-totp-code]
 Show metadata and data IDs. Mask data values unless explicitly revealed.
 .PP
 Use \-\-data-id ID to show only one element. It remains masked unless
@@ -204,6 +204,19 @@ Creation and update times use YYYY-MM-DD HH:MM (UTC).
 Metadata and revealed passwords/codes escape control characters and backslashes;
 comma-separated tag names also escape commas. Notes and revealed SSH keys use
 indented multiline blocks. Stored values are unchanged; this is not raw export.
+.PP
+Use \-\-totp-code with \-\-data-id ID to generate the selected TOTP element's
+current code. Output only the code and a newline, retaining leading zeros and
+not revealing the Base32 secret. This option conflicts with \-\-raw,
+\-\-reveal and \-\-ssh-part. A non-TOTP element is an error.
+Generation follows RFC 6238 with T0 = 0 and the saved algorithm, digits and
+period. Time is system-clock Unix seconds, independent of the local timezone.
+Correct system time is needed to match the service. Each invocation computes
+one code without modifying records or timestamps.
+.nf
+repass record show 1 \-\-data-id 4 \-\-totp-code
+repass record show \-\-record-id 1 \-\-data-id 4 \-\-totp-code
+.fi
 .TP
 .B record update RECORD_ID [options]
 Change only supplied fields. Accept
@@ -268,7 +281,8 @@ Read one nonblank recovery code or other code line, removing its line ending.
 .TP
 .B \-\-totp-stdin
 Read one uppercase RFC 4648 Base32 secret line. Accept unpadded encoding or
-canonical padding. Store configuration only; no one-time codes are calculated.
+canonical padding; save without padding. Generate current codes with
+record show \-\-data-id ID \-\-totp-code.
 Related options require this flag:
 .BR "\-\-algorithm sha1|sha256|sha512" " (default: sha1),"
 .BR "\-\-digits 6|7|8" " (default: 6), and"

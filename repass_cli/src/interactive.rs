@@ -92,7 +92,7 @@ fn session_help(mut command: clap::Command) -> clap::Command {
                     .long_help("Requests one code using hidden terminal input. The code must not be blank."),
                 "totp_stdin" => arg
                     .help("Enter an uppercase Base32 TOTP secret using hidden input")
-                    .long_help("Requests an uppercase Base32 TOTP secret using hidden terminal input. Accepts unpadded Base32 or canonical padding. Stores configuration only; no one-time codes are calculated. Defaults: SHA-1, 6 digits, 30 seconds."),
+                    .long_help("Requests an uppercase Base32 TOTP secret using hidden terminal input. Accepts unpadded Base32 or canonical padding; saves without padding. Use record show --data-id ID --totp-code to generate the current code. Defaults: SHA-1, 6 digits, 30 seconds."),
                 "private_key_stdin" => arg
                     .help("Enter a private SSH key; finish with a line containing only '.'")
                     .long_help("Uses ordinary multiline terminal input. Finish with a line containing only '.'. Whitespace and line endings are preserved; the terminator is not stored. EOF before the terminator cancels the operation. Both SSH parts may be entered separately."),

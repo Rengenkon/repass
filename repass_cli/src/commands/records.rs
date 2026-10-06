@@ -121,6 +121,7 @@ pub(super) fn execute_record(
             data_id,
             raw,
             ssh_part,
+            totp_code,
         } => {
             let id = parse_record_id(&record_id)?;
             let storage = session.ensure_storage(output, interactive)?;
@@ -134,6 +135,15 @@ pub(super) fn execute_record(
                         .ok_or(StorageError::DataNotFound(id))
                 })
                 .transpose()?;
+            if totp_code {
+                let entry = selected.ok_or("TOTP code output requires --data-id")?;
+                let Data::Totp(config) = &entry.value else {
+                    return Err("--totp-code requires a TOTP data element".into());
+                };
+                let code = crate::totp::generate_current(config)?;
+                writeln!(output, "{code}")?;
+                return Ok(());
+            }
             if raw {
                 let entry = selected.ok_or("raw output requires --data-id")?;
                 let value = match (&entry.value, ssh_part) {
