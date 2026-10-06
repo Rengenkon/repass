@@ -1,0 +1,508 @@
+.TH REPASS 1 "2026-10-06" "repass" "User Commands"
+.SH NAME
+repass \- generate passwords and manage a local password vault
+.SH SYNOPSIS
+.B repass generate
+.RB ( \-\-length " N | " \-\-min-length " MIN " \-\-max-length " MAX )"
+.BI \-\-separator-kind " KIND"
+.RI [ options ]
+.br
+.B repass vault
+.RI [ \-\-data-dir " DIR] " command
+.br
+.B repass record
+.RI [ \-\-data-dir " DIR] " command " [options]"
+.br
+.B repass tag
+.RI [ \-\-data-dir " DIR] " command " [options]"
+.br
+.B repass interactive
+.RI [ \-\-data-dir " DIR] [\-\-warnings | \-\-no-warnings]"
+.br
+.B repass completions
+.I SHELL
+.SH DESCRIPTION
+repass generates passwords without opening a vault and stores records in a
+local vault. A record has a name, optional username, host, notes and tags,
+and any number of passwords, SSH key pairs, TOTP configurations and codes.
+Records, tags and data elements use stable IDs. A data ID identifies an
+element within one record; deleted data IDs are not reused.
+.PP
+Running repass without a command displays help.
+Use
+.B \-h
+for a compact summary and
+.B \-\-help
+for detailed command help and examples.
+This is a personal, educational project.
+.SH PRIMARY ARGUMENTS
+For commands with one required value, put it immediately after the command,
+or supply its named form anywhere among that command's arguments:
+.TP
+.B record create, tag create
+NAME or \-\-name NAME.
+.TP
+.B record show, record update, record remove
+RECORD_ID or \-\-record-id RECORD_ID.
+.TP
+.B tag remove
+TAG_ID or \-\-tag-id TAG_ID.
+.TP
+.B vault switch
+DIR or \-\-dir DIR (session only).
+.TP
+.B completions
+SHELL or \-\-shell SHELL.
+.PP
+Supplying both forms is an error. For example:
+.nf
+repass record create mail \-\-tag 1
+repass record create \-\-tag 1 \-\-name mail
+repass record show \-\-reveal \-\-record-id 1
+.fi
+.SH VAULT DIRECTORY AND PASSWORD INPUT
+.B \-\-data-dir DIR
+is available on vault, record, tag and interactive commands. Directory
+selection uses the explicit option, then
+.BR REPASS_DATA_DIR ,
+then
+.BR $HOME/.repass .
+A leading tilde path component expands to HOME; an empty selected directory
+is rejected. Generation and completion do not require a data directory.
+.PP
+Storage commands request the master password through hidden terminal input.
+In one-shot mode, all master-password prompts go to stderr, including new
+password and confirmation prompts during a password change.
+When no vault exists, ordinary storage commands, including
+.BR "vault info" ,
+create one after requesting a nonempty password and confirmation.
+Existing partial vaults or surviving backups are not silently overwritten.
+.SS Vault commands
+.TP
+.B vault init
+Create a new vault, refusing existing vault files or backups.
+.TP
+.B vault info
+Show the directory, record and tag counts, tag-catalog status and any failure
+to save repaired metadata counts.
+.TP
+.B vault change-password
+Request and confirm a nonempty new master password. Update key metadata
+and its backup without rewriting records or tags.
+.TP
+.B vault recover
+Restore missing or damaged files from authenticated, validated .bak snapshots.
+Preserve damaged originals as .damaged-* files. Record and tag backups contain
+the previous snapshot, so the latest mutation may be lost.
+Recovery cannot reconstruct records without a usable backup.
+.TP
+.B vault finish-init
+Complete an interrupted empty-vault initialization. Create empty records only
+when authenticated metadata has valid zero counts and no record/tag files or
+their backups exist. This does not restore lost records.
+.SH PASSWORD GENERATION
+Specify an exact
+.B \-\-length N
+or both inclusive bounds
+.B \-\-min-length MIN \-\-max-length MAX
+and a separator strategy. Length counts Unicode scalar values, including
+separators, rather than bytes or grapheme clusters.
+Output contains one password per line. An unreachable target length is an
+error; range targets are sampled from the whole range.
+.TP
+.B \-\-separator-kind KIND
+Accept a strategy name or its number:
+.RS
+.TP
+.B 1, none
+Join dictionary entries without separators.
+.TP
+.B 2, between-parts
+Insert separators between dictionary entries.
+.TP
+.B 3, fixed-interval
+Insert separators after intervals of content Unicode scalars, independent
+of entry boundaries.
+.TP
+.B 4, fixed-count
+Distribute a requested number of insertions across content. Short content
+may reduce that number.
+.RE
+.TP
+.B \-\-count N
+Number of passwords to generate; default: 1.
+.TP
+.B \-\-dictionary FILE
+Use a UTF-8 dictionary with one entry per line, removing line endings.
+Entries may contain multiple characters. Conflicts with
+.BR \-\-preset .
+.TP
+.B \-\-preset SET...
+Combine built-in character sets: digits, lowercase, uppercase, punctuation,
+symbols, brackets, quotes, hash-dollar-percent-caret and backslash-pipe-tilde.
+Repeat the option or give several names. Sets form a union; each password
+need not contain characters from every selected set.
+Without a dictionary or preset, all built-in sets are used.
+.TP
+.B \-\-shape-selection first|random
+Use the first feasible layout (default), or sample uniformly among feasible
+layouts. The latter is not uniform sampling among all possible passwords.
+.TP
+.B \-\-separator TEXT
+Nonempty separator text; default: a hyphen. Ignored by none.
+.TP
+.B \-\-separator-interval N
+Positive content interval for fixed-interval; default: 5.
+.TP
+.B \-\-separator-count N
+Positive insertion count for fixed-count; default: 3.
+.TP
+.B \-\-warnings, \-\-no-warnings
+Enable or disable warnings for unused separator options. Warnings are enabled
+by default. Unused values are still validated. One-shot generation writes
+warnings to stderr and passwords to stdout.
+.PP
+Limits: 1,000,000 scalars per password, 100,000 passwords per batch and
+16,000,000 collected batch scalars, calculated using the maximum target length.
+.SH RECORD COMMANDS
+.TP
+.B record create NAME [options]
+Create a record with a nonempty name. Optional metadata:
+.BR "\-\-username TEXT" ,
+.BR "\-\-host HOST" ,
+.BR "\-\-notes TEXT" ,
+and
+.BR "\-\-tag TAG_ID..." .
+Optionally supply one data source; otherwise the record starts with no data.
+.TP
+.B record list [filters]
+List summaries ordered by record ID, without secret values.
+.TP
+.B record find [\-\-query TEXT] [filters]
+Search metadata with a case-insensitive Unicode fuzzy pattern. Match name,
+username, host, notes and tag names separately, ranking each record by its
+best field score. Order by descending score, then ID.
+Secret data values are never searched.
+Without a query, use exact filters and order by ID.
+.TP
+.B record show RECORD_ID [\-\-data-id ID] [\-\-reveal] [\-\-raw [\-\-ssh-part private|public]] [\-\-totp-code]
+Show metadata and data IDs. Mask data values unless explicitly revealed.
+.PP
+Use \-\-data-id ID to show only one element. It remains masked unless
+\-\-reveal is supplied. With \-\-raw, output the selected secret verbatim,
+without metadata, labels, escaping or an added newline. Raw output requires
+\-\-data-id and reveals the value without requiring \-\-reveal.
+For TOTP, output the stored Base32 secret, not a generated code.
+For SSH, also supply \-\-ssh-part private or public. Selecting an absent part
+is an error; \-\-ssh-part requires raw output and an SSH element.
+.nf
+repass record show 1 \-\-data-id 2 \-\-reveal
+repass record show 1 \-\-data-id 3 \-\-raw \-\-ssh-part private > id_ed25519
+.fi
+TOTP algorithm, digits and period remain visible.
+Creation and update times use YYYY-MM-DD HH:MM (UTC).
+Metadata and revealed passwords/codes escape control characters and backslashes;
+comma-separated tag names also escape commas. Notes and revealed SSH keys use
+indented multiline blocks. Stored values are unchanged; this is not raw export.
+.PP
+Use \-\-totp-code with \-\-data-id ID to generate the selected TOTP element's
+current code. Output only the code and a newline, retaining leading zeros and
+not revealing the Base32 secret. This option conflicts with \-\-raw,
+\-\-reveal and \-\-ssh-part. A non-TOTP element is an error.
+Generation follows RFC 6238 with T0 = 0 and the saved algorithm, digits and
+period. Time is system-clock Unix seconds, independent of the local timezone.
+Correct system time is needed to match the service. Each invocation computes
+one code without modifying records or timestamps.
+.nf
+repass record show 1 \-\-data-id 4 \-\-totp-code
+repass record show \-\-record-id 1 \-\-data-id 4 \-\-totp-code
+.fi
+.TP
+.B record update RECORD_ID [options]
+Change only supplied fields. Accept
+.BR \-\-name ,
+.BR \-\-username ,
+.BR \-\-host ,
+.BR \-\-notes ,
+.BR "\-\-add-tag TAG_ID..." ,
+and
+.BR "\-\-remove-tag TAG_ID..." .
+Remove optional fields with
+.BR \-\-remove-username ,
+.BR \-\-remove-host ,
+or
+.BR \-\-remove-notes .
+Each field-removal flag conflicts with setting that field.
+A data source without \-\-replace-data always adds a new element, including
+when passwords already exist. Fields, tags and data can be changed together;
+all changes are validated before saving one record update.
+After decryption, target IDs and operation conflicts are checked before new
+secret input is requested. The new value itself is validated after input.
+.TP
+.B record remove RECORD_ID
+Remove the record and all its data elements.
+.TP
+.B record update RECORD_ID DATA_SOURCE
+Append one typed data element.
+.TP
+.B record update RECORD_ID \-\-replace-data DATA_ID DATA_SOURCE
+Replace the entire element, retaining its ID. Its type may change.
+For SSH, supply both key parts again to retain both: supplying only a public
+key removes the previous private part.
+.TP
+.B record update RECORD_ID \-\-remove-data DATA_ID...
+Remove elements; their IDs will not be reused. The same element cannot be
+replaced and removed in one operation.
+.SS Exact and fuzzy filters
+Both list and find accept
+.BR "\-\-name NAME" ,
+.BR "\-\-host HOST" ,
+and
+.BR "\-\-tag TAG_ID..." .
+Names match in full, case-sensitively. All requested tags must match.
+Hosts are IP addresses or domains without protocol, port or path.
+IPs compare by parsed value; domains ignore case and a trailing dot.
+No DNS lookup is performed.
+.PP
+Exact filters apply before fuzzy search. Query whitespace is trimmed and
+blank queries are rejected. A query is one pattern, with no operator syntax.
+Noncontiguous characters support abbreviations. Queries of 1\(en3 Unicode
+scalars allow no typos, 4\(en7 allow one, and longer queries allow up to two.
+.SH DATA SOURCES
+Choose one type per operation. Several elements of the same type may coexist
+in a record. In one-shot mode, the master password is requested separately
+through the terminal, not read from the data-source stdin stream.
+.TP
+.B \-\-password-stdin
+Read one password line from stdin, removing the final LF or CRLF.
+.TP
+.B \-\-code-stdin
+Read one nonblank recovery code or other code line, removing its line ending.
+.TP
+.B \-\-totp-stdin
+Read one uppercase RFC 4648 Base32 secret line. Accept unpadded encoding or
+canonical padding; save without padding. Generate current codes with
+record show \-\-data-id ID \-\-totp-code.
+Related options require this flag:
+.BR "\-\-algorithm sha1|sha256|sha512" " (default: sha1),"
+.BR "\-\-digits 6|7|8" " (default: 6), and"
+.BR "\-\-period SECONDS" " (positive; default: 30)."
+.TP
+.B \-\-private-key-file FILE, \-\-private-key-stdin
+Read the private SSH key from a UTF-8 file or stdin until EOF.
+These alternatives conflict.
+.TP
+.B \-\-public-key-file FILE, \-\-public-key-stdin
+Read the public SSH key from a UTF-8 file or stdin until EOF.
+These alternatives conflict.
+.PP
+SSH requires at least one part; supplied parts cannot be blank. Whitespace
+and line endings are preserved, and cryptographic key structure is not parsed.
+In one-shot mode only one part can use stdin; use a file for the other part.
+.SH TAG COMMANDS
+.TP
+.B tag create NAME
+Create a tag with a unique, nonempty name.
+.TP
+.B tag list
+List tag IDs and names, including technical names for missing catalog entries.
+.TP
+.B tag rename TAG_ID \-\-name NAME
+Set a unique, nonempty name without changing the tag ID.
+.TP
+.B tag remove TAG_ID
+Remove an unused tag. Tags referenced by records cannot be removed;
+detach them with record update first.
+.TP
+.B tag recover
+Rebuild a missing or damaged tag-name catalog using currently known tags and
+technical names such as #tag-42. This does not recover lost original names.
+Use vault recover for restoration from usable backups.
+.SH INTERACTIVE MODE
+.B repass interactive
+starts a persistent session. Enter commands without the repass prefix;
+quotes preserve spaces. Missing required arguments are prompted, but optional
+arguments are not. Generation and help do not open the selected vault.
+.PP
+Passwords, codes and TOTP secrets use hidden terminal input when their
+source flags are supplied. SSH stdin flags use ordinary multiline input:
+finish each part with a line containing only a period (.). The terminator
+is not stored; EOF before it cancels the operation. Both parts can be
+entered separately in this mode.
+.TP
+.B help [COMMAND...], h [COMMAND...]
+Show help; for example, help record update.
+Help shows a required choice between positional and named forms. Omitting both
+prompts for the value.
+.TP
+.B vault switch DIR
+Close the current vault and select another directory. Open it lazily on the
+next storage operation. Ordinary session commands do not accept \-\-data-dir.
+.TP
+.B warnings [on|off]
+Show or change the session warning setting. Defaults to enabled; entry options
+\-\-warnings and \-\-no-warnings set it initially. Generation warning flags
+override it only for that invocation.
+.TP
+.B quit, q
+Leave the session. EOF also exits; exit is not a supported command.
+.SH SHELL COMPLETION
+.B repass completions SHELL
+prints a static script for bash, zsh, fish, powershell or elvish without
+opening a vault. Load it in the external shell or save it in that shell's
+completion directory. This does not provide Tab completion inside a repass
+session and does not modify shell configuration.
+.SH EXAMPLES
+Generate three 16-scalar passwords from digits and lowercase characters:
+.PP
+.nf
+repass generate \-\-length 16 \-\-separator-kind none \e
+    \-\-preset digits lowercase \-\-count 3
+.fi
+.PP
+Generate with separators included in the target length:
+.PP
+.nf
+repass generate \-\-length 16 \-\-separator-kind 2 \-\-separator '::'
+repass generate \-\-length 20 \-\-separator-kind 3 \e
+    \-\-separator-interval 4
+repass generate \-\-min-length 12 \-\-max-length 20 \e
+    \-\-separator-kind none
+.fi
+.PP
+Use a word dictionary (the target must be reachable):
+.PP
+.nf
+repass generate \-\-length 18 \-\-separator-kind between-parts \e
+    \-\-dictionary words.txt \-\-shape-selection random
+.fi
+.PP
+Initialize a separate vault and inspect it:
+.PP
+.nf
+repass vault \-\-data-dir ~/vault init
+repass vault \-\-data-dir ~/vault info
+.fi
+.PP
+Store an SSH pair from files and find the record:
+.PP
+.nf
+repass record create server \-\-username alice \e
+    \-\-host example.test \-\-private-key-file ~/.ssh/id_ed25519 \e
+    \-\-public-key-file ~/.ssh/id_ed25519.pub
+repass record find \-\-host EXAMPLE.TEST.
+repass record find \-\-query alce
+.fi
+.PP
+Read the IDs from list, find, show or tag list before using the examples
+below; the numbers are illustrative:
+.PP
+.nf
+repass tag create work
+repass tag list
+repass record update 1 \-\-add-tag 2
+repass record find \-\-query alice \-\-host example.test \-\-tag 2
+repass record show 1
+repass record show 1 \-\-reveal
+repass record update 1 \-\-replace-data 1 \-\-private-key-file new_key \e
+    \-\-public-key-file new_key.pub
+repass record update 1 \-\-remove-notes \-\-remove-tag 2
+repass record update 1 \-\-remove-data 3
+.fi
+.PP
+Enter passwords, TOTP configuration and codes with hidden input in a session.
+After each source command, enter the requested value at its hidden prompt:
+.PP
+.nf
+repass interactive
+record create mail \-\-username alice \-\-password-stdin
+record list
+record update 1 \-\-totp-stdin \-\-algorithm sha256 \-\-digits 8
+record update 1 \-\-code-stdin
+help record update
+vault switch ~/other-vault
+warnings off
+quit
+.fi
+.PP
+One-shot data sources can instead read a redirected file; the master password
+is still entered separately through the terminal:
+.PP
+.nf
+repass record update 1 \-\-totp-stdin < totp-secret.txt
+.fi
+.PP
+Change the master password or explicitly restore a backup:
+.PP
+.nf
+repass vault change-password
+repass vault recover
+.fi
+.PP
+Load completion in the current Bash shell:
+.PP
+.nf
+source <(repass completions bash)
+.fi
+.SH ENVIRONMENT
+.TP
+.B REPASS_DATA_DIR
+Default vault directory when \-\-data-dir is absent.
+.TP
+.B HOME
+Used for the default directory and leading-tilde expansion.
+.TP
+.B NO_COLOR
+Set to 1 to disable terminal colors. Redirected output is plain text;
+generated passwords and completion scripts have no added color codes.
+.SH FILES
+Paths below are relative to the selected vault directory.
+.TP
+.B metadata.repass
+Key metadata and authenticated auxiliary counts.
+.TP
+.B records.repass
+Encrypted records and record-ID allocation state.
+.TP
+.B tags.repass
+Optional encrypted tag-name catalog and tag-ID allocation state.
+.TP
+.B metadata.repass.bak, records.repass.bak, tags.repass.bak
+Recovery snapshots. The metadata backup is refreshed on password changes;
+record and tag backups retain the previous snapshot.
+.TP
+.B *.damaged-*
+Damaged originals preserved by explicit recovery.
+.PP
+On Unix, newly created directories use at most 0700 and vault files use at
+most 0600. Atomic replacement preserves stricter owner permissions.
+Opening an existing vault does not automatically change its permissions.
+.SH NOTES
+Vault sessions use an exclusive advisory directory lock. A second session
+cannot open the same vault until the first closes it.
+File replacement is atomic, but updates involving several files are not a
+single transaction. Counts are reconciled against readable data on open.
+.PP
+A missing or unreadable tag catalog does not prevent access to records;
+unnamed referenced tags appear as technical names. Ordinary tag operations
+do not overwrite a damaged catalog.
+If a missing catalog has saved counts, record references or a surviving backup,
+ordinary catalog writes require explicit recovery first. A never-created
+catalog remains writable. Rebuilding a missing primary preserves its existing
+backup.
+.SS Input and file limits
+Metadata reads use the fixed maximum size of the current format. Encrypted
+record/tag files and backups are limited to 64 MiB on read and save; oversized
+existing files are rejected. Each SSH part is limited to 1 MiB. One-shot secret
+lines and interactive command/argument lines are limited to 1 MiB including
+line endings. Hidden terminal secrets are checked against 1 MiB after input
+returns. Dictionary files are limited to 16 MiB and 100,000 nonempty entries
+on load and save. Limits count bytes. Damaged originals are streamed to disk
+during recovery without loading the entire file into memory.
+.PP
+.PP
+Only current storage formats are accepted. Older formats, including
+password-only record schema 1 and legacy vault.repass files, are not migrated.
+.SH SEE ALSO
+.BR man (1),
+.BR bash (1)
