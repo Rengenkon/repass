@@ -79,7 +79,7 @@ impl Separator for FixedIntervalSeparator<'_> {
             for ch in part.chars() {
                 output.push(ch);
                 consumed += 1;
-                if consumed % self.interval_chars == 0 && consumed < content_chars {
+                if consumed.is_multiple_of(self.interval_chars) && consumed < content_chars {
                     output.push_str(self.separator);
                 }
             }

@@ -271,29 +271,6 @@ fn optional_field<T>(value: Option<T>, clear: bool) -> FieldUpdate<T> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn timestamps_show_dates_to_the_minute_and_handle_extreme_values() {
-        for (milliseconds, expected) in [
-            (0, "1970-01-01 00:00"),
-            (1_709_164_800_123, "2024-02-29 00:00"),
-            (253_402_300_799_999, "9999-12-31 23:59"),
-        ] {
-            assert_eq!(
-                format_timestamp(Timestamp::from_unix_millis(milliseconds)).unwrap(),
-                expected
-            );
-        }
-        assert_eq!(
-            format_timestamp(Timestamp::from_unix_millis(u64::MAX)).unwrap(),
-            "outside supported date range (Unix ms: 18446744073709551615)"
-        );
-    }
-}
-
 fn read_secret_line(
     label: &str,
     session: &mut Session,
@@ -526,5 +503,28 @@ pub(super) fn execute_tag(
                 format_args!("Tag catalog rebuilt with {count} tags"),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamps_show_dates_to_the_minute_and_handle_extreme_values() {
+        for (milliseconds, expected) in [
+            (0, "1970-01-01 00:00"),
+            (1_709_164_800_123, "2024-02-29 00:00"),
+            (253_402_300_799_999, "9999-12-31 23:59"),
+        ] {
+            assert_eq!(
+                format_timestamp(Timestamp::from_unix_millis(milliseconds)).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            format_timestamp(Timestamp::from_unix_millis(u64::MAX)).unwrap(),
+            "outside supported date range (Unix ms: 18446744073709551615)"
+        );
     }
 }

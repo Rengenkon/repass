@@ -78,13 +78,12 @@ impl<'dictionary, 'entries> CombinationPlanner<'dictionary, 'entries> {
         let Some(min_required) = min_entry_chars.checked_mul(shape.part_count()) else {
             return Ok(false);
         };
-        let max_possible = max_entry_chars
-            .checked_mul(shape.part_count())
-            .unwrap_or(usize::MAX);
+        let max_possible = max_entry_chars.saturating_mul(shape.part_count());
         if shape.content_chars() < min_required || shape.content_chars() > max_possible {
             return Ok(false);
         }
-        if self.entry_chars_gcd == 0 || shape.content_chars() % self.entry_chars_gcd != 0 {
+        if self.entry_chars_gcd == 0 || !shape.content_chars().is_multiple_of(self.entry_chars_gcd)
+        {
             return Ok(false);
         }
 

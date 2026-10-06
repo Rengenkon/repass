@@ -43,17 +43,17 @@ pub trait Dictionary<'a> {
 
 impl<'a, T: Dictionary<'a> + ?Sized> Dictionary<'a> for Box<T> {
     fn entry(&self, index: usize) -> Option<&str> {
-        let dictionary: &T = &**self;
+        let dictionary: &T = self;
         dictionary.entry(index)
     }
 
     fn add(&mut self, values: &'a [&'a str]) -> Result<(), DictionaryError> {
-        let dictionary: &mut T = &mut **self;
+        let dictionary: &mut T = self;
         dictionary.add(values)
     }
 
     fn len(&self) -> usize {
-        let dictionary: &T = &**self;
+        let dictionary: &T = self;
         dictionary.len()
     }
 }

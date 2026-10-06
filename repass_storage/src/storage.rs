@@ -599,7 +599,7 @@ impl Storage {
 
     fn commit_tags(&mut self, tags: Tags) -> Result<(), StorageError> {
         let result = self.save_tags(&tags);
-        if result.is_ok() || result.as_ref().is_err_and(|error| write_committed(error)) {
+        if result.is_ok() || result.as_ref().is_err_and(write_committed) {
             self.tags = tags;
             self.tag_catalog_status = TagCatalogStatus::Present;
         }

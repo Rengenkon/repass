@@ -377,11 +377,11 @@ impl Records {
         record.data = data;
         record.next_data_id = next;
         let mut changed = record.data != self.rows[position].data;
-        if let Some(name) = &patch.name {
-            if record.name != *name {
-                record.name.clone_from(name);
-                changed = true;
-            }
+        if let Some(name) = &patch.name
+            && record.name != *name
+        {
+            record.name.clone_from(name);
+            changed = true;
         }
         changed |= apply_field(&mut record.username, &patch.username);
         if let FieldUpdate::Set(host) = &patch.host {
@@ -597,9 +597,9 @@ mod tests {
     fn swap_remove_keeps_records_and_stable_id_index_consistent() {
         let now = Timestamp::from_unix_millis(10);
         let mut records = Records::new();
-        let first = records.create(new_record("first"), now.clone()).unwrap();
-        let middle = records.create(new_record("middle"), now.clone()).unwrap();
-        let last = records.create(new_record("last"), now.clone()).unwrap();
+        let first = records.create(new_record("first"), now).unwrap();
+        let middle = records.create(new_record("middle"), now).unwrap();
+        let last = records.create(new_record("last"), now).unwrap();
 
         records.remove(middle).unwrap();
         assert!(records.get(middle).is_none());
@@ -613,7 +613,7 @@ mod tests {
     fn patch_changes_only_requested_fields_and_rejects_conflicting_tags() {
         let now = Timestamp::from_unix_millis(10);
         let mut records = Records::new();
-        let id = records.create(new_record("mail"), now.clone()).unwrap();
+        let id = records.create(new_record("mail"), now).unwrap();
         records
             .update(
                 id,

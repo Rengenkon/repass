@@ -155,10 +155,10 @@ fn missing_arguments(command: &clap::Command, matches: &ArgMatches, missing: &mu
             });
         }
     }
-    if let Some((name, submatches)) = matches.subcommand() {
-        if let Some(subcommand) = command.find_subcommand(name) {
-            missing_arguments(subcommand, submatches, missing);
-        }
+    if let Some((name, submatches)) = matches.subcommand()
+        && let Some(subcommand) = command.find_subcommand(name)
+    {
+        missing_arguments(subcommand, submatches, missing);
     }
 }
 

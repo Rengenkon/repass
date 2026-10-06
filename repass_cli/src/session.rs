@@ -244,7 +244,7 @@ impl Session {
                         .map_err(Into::into)
                 }
             }
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error),
         };
         password.fill(0);
         result
