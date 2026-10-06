@@ -185,8 +185,20 @@ best field score. Order by descending score, then ID.
 Secret data values are never searched.
 Without a query, use exact filters and order by ID.
 .TP
-.B record show RECORD_ID [\-\-reveal]
+.B record show RECORD_ID [\-\-reveal] [\-\-data-id ID] [\-\-raw [\-\-ssh-part private|public]]
 Show metadata and data IDs. Mask data values unless explicitly revealed.
+.PP
+Use \-\-data-id ID to show only one element. It remains masked unless
+\-\-reveal is supplied. With \-\-raw, output the selected secret verbatim,
+without metadata, labels, escaping or an added newline. Raw output requires
+\-\-data-id and reveals the value without requiring \-\-reveal.
+For TOTP, output the stored Base32 secret, not a generated code.
+For SSH, also supply \-\-ssh-part private or public. Selecting an absent part
+is an error; \-\-ssh-part requires raw output and an SSH element.
+.nf
+repass record show 1 \-\-data-id 2 \-\-reveal
+repass record show 1 \-\-data-id 3 \-\-raw \-\-ssh-part private > id_ed25519
+.fi
 TOTP algorithm, digits and period remain visible.
 Creation and update times use YYYY-MM-DD HH:MM (UTC).
 Metadata and revealed passwords/codes escape control characters and backslashes;

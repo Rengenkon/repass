@@ -1,5 +1,5 @@
 use super::{
-    DataInput, RecordCommand, Session, TagCommand, TotpAlgorithmArg, parse_record_id,
+    DataInput, RecordCommand, Session, SshPart, TagCommand, TotpAlgorithmArg, parse_record_id,
     read_record_password, success,
 };
 use crate::{Result, output};
@@ -115,10 +115,46 @@ pub(super) fn execute_record(
             }
             Ok(())
         }
-        RecordCommand::Show { record_id, reveal } => {
+        RecordCommand::Show {
+            record_id,
+            reveal,
+            data_id,
+            raw,
+            ssh_part,
+        } => {
             let id = parse_record_id(&record_id)?;
             let storage = session.ensure_storage(output, interactive)?;
             let record = storage.get_record(id)?;
+            let selected = data_id
+                .map(|id| {
+                    record
+                        .data()
+                        .iter()
+                        .find(|entry| entry.id == id)
+                        .ok_or(StorageError::DataNotFound(id))
+                })
+                .transpose()?;
+            if raw {
+                let entry = selected.ok_or("raw output requires --data-id")?;
+                let value = match (&entry.value, ssh_part) {
+                    (Data::SshKey(key), Some(SshPart::Private)) => key
+                        .private_key
+                        .as_deref()
+                        .ok_or("selected SSH element has no private key")?,
+                    (Data::SshKey(key), Some(SshPart::Public)) => key
+                        .public_key
+                        .as_deref()
+                        .ok_or("selected SSH element has no public key")?,
+                    (Data::SshKey(_), None) => {
+                        return Err("raw SSH output requires --ssh-part private or public".into());
+                    }
+                    (_, Some(_)) => return Err("--ssh-part requires an SSH data element".into()),
+                    (Data::Password(value) | Data::Code(value), None) => value,
+                    (Data::Totp(totp), None) => &totp.secret,
+                };
+                output.write_all(value.as_bytes())?;
+                return Ok(());
+            }
             writeln!(output, "ID: {}", record.id)?;
             writeln!(output, "Name: {}", output::text(record.name))?;
             writeln!(
@@ -151,6 +187,9 @@ pub(super) fn execute_record(
                 .join(", ");
             writeln!(output, "Tags: {tag_names}")?;
             for entry in record.data() {
+                if data_id.is_some_and(|id| entry.id != id) {
+                    continue;
+                }
                 writeln!(output, "Data {} ({}):", entry.id, entry.value.kind())?;
                 show_data(&entry.value, reveal, output)?;
             }

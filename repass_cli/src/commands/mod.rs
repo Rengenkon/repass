@@ -370,6 +370,19 @@ pub enum RecordCommand {
         /// Include secret values in the output
         #[arg(long)]
         reveal: bool,
+        /// Show only this data element (see record show for IDs)
+        #[arg(long)]
+        data_id: Option<DataId>,
+        /// Output the selected secret verbatim, without labels or an added newline
+        ///
+        /// Requires --data-id and reveals its value without --reveal. For TOTP,
+        /// outputs the stored Base32 secret, not a generated code. For SSH,
+        /// also requires --ssh-part.
+        #[arg(long, requires = "data_id")]
+        raw: bool,
+        /// Select the SSH key part for raw output; fails if that part is absent
+        #[arg(long, value_enum, requires = "raw")]
+        ssh_part: Option<SshPart>,
     },
     /// Change record fields, tags and data elements in one operation
     ///
@@ -444,6 +457,12 @@ pub enum TotpAlgorithmArg {
     Sha1,
     Sha256,
     Sha512,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum SshPart {
+    Private,
+    Public,
 }
 
 #[derive(Args, Default)]
@@ -765,6 +784,9 @@ mod tests {
                 command: RecordCommand::Show {
                     record_id: "1".into(),
                     reveal: false,
+                    data_id: None,
+                    raw: false,
+                    ssh_part: None,
                 },
             },
             &mut session,
@@ -788,6 +810,9 @@ mod tests {
                 command: RecordCommand::Show {
                     record_id: "1".into(),
                     reveal: true,
+                    data_id: None,
+                    raw: false,
+                    ssh_part: None,
                 },
             },
             &mut session,
@@ -1315,6 +1340,109 @@ mod tests {
             let mut words = vec!["repass", "record", "create", "test"];
             words.extend(args);
             assert!(Cli::try_parse_from(words).is_err());
+        }
+    }
+
+    #[test]
+    fn selected_data_and_raw_output_preserve_values_and_reject_invalid_selections() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        storage
+            .create_record(NewRecord {
+                name: "mail".into(),
+                username: None,
+                host: None,
+                notes: None,
+                tags: vec![],
+                data: vec![
+                    Data::Password("päss\t\\\u{1b}[2J".into()),
+                    Data::Code("code".into()),
+                    Data::SshKey(
+                        repass_storage::SshKey::new(
+                            Some("private\r\nkey\n".into()),
+                            Some("public key".into()),
+                        )
+                        .unwrap(),
+                    ),
+                    Data::Totp(
+                        repass_storage::Totp::new(
+                            "JBSWY3DPEHPK3PXP".into(),
+                            repass_storage::TotpAlgorithm::Sha1,
+                            6,
+                            30,
+                        )
+                        .unwrap(),
+                    ),
+                    Data::SshKey(
+                        repass_storage::SshKey::new(None, Some("public only".into())).unwrap(),
+                    ),
+                ],
+            })
+            .unwrap();
+        let mut session = Session::with_storage(directory.0.clone(), storage);
+        for interactive in [false, true] {
+            let masked =
+                run_record_line("show 1 --data-id 2", "", &mut session, interactive).unwrap();
+            assert!(masked.contains("Data 2 ("));
+            assert!(masked.contains("Code: ********"));
+            assert!(!masked.contains("Data 1 ("));
+            assert!(!masked.contains("Data 3 ("));
+            let revealed =
+                run_record_line("show 1 --data-id 2 --reveal", "", &mut session, interactive)
+                    .unwrap();
+            assert!(revealed.contains("Code: code"));
+            for (options, expected) in [
+                ("--data-id 1 --raw", "päss\t\\\u{1b}[2J"),
+                ("--data-id 2 --raw", "code"),
+                ("--data-id 3 --raw --ssh-part private", "private\r\nkey\n"),
+                ("--data-id 3 --raw --ssh-part public", "public key"),
+                ("--data-id 4 --raw", "JBSWY3DPEHPK3PXP"),
+                ("--data-id 5 --raw --ssh-part public", "public only"),
+            ] {
+                assert_eq!(
+                    run_record_line(&format!("show 1 {options}"), "", &mut session, interactive)
+                        .unwrap(),
+                    expected
+                );
+            }
+        }
+        for options in [
+            "--data-id 999",
+            "--data-id 999 --raw",
+            "--data-id 3 --raw",
+            "--data-id 5 --raw --ssh-part private",
+            "--data-id 1 --raw --ssh-part public",
+        ] {
+            let command = Cli::try_parse_from(
+                shlex::split(&format!("repass record show 1 {options}")).unwrap(),
+            )
+            .unwrap()
+            .command
+            .unwrap();
+            let mut output = Vec::new();
+            assert!(
+                execute(
+                    command,
+                    &mut session,
+                    &mut Cursor::new(""),
+                    &mut output,
+                    false
+                )
+                .is_err()
+            );
+            assert!(output.is_empty());
+        }
+        for options in [
+            "--raw",
+            "--ssh-part private",
+            "--data-id 3 --raw --ssh-part invalid",
+        ] {
+            assert!(
+                Cli::try_parse_from(
+                    shlex::split(&format!("repass record show 1 {options}")).unwrap()
+                )
+                .is_err()
+            );
         }
     }
 

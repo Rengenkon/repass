@@ -32,7 +32,7 @@ repass vault [--data-dir <DIR>] finish-init
 repass record [--data-dir <DIR>] create <NAME> [<DATA_SOURCE>] [--username <TEXT>] [--host <HOST>] [--notes <TEXT>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] list [--name <NAME>] [--host <HOST>] [--tag <TAG_ID>...]
 repass record [--data-dir <DIR>] find [--query <TEXT>] [--name <NAME>] [--host <HOST>] [--tag <TAG_ID>...]
-repass record [--data-dir <DIR>] show <RECORD_ID> [--reveal]
+repass record [--data-dir <DIR>] show <RECORD_ID> [--reveal] [--data-id <ID>] [--raw [--ssh-part private|public]]
 repass record [--data-dir <DIR>] update <RECORD_ID> [--name <NAME>] [--username <TEXT> | --remove-username] [--host <HOST> | --remove-host] [--notes <TEXT> | --remove-notes] [<DATA_SOURCE>] [--replace-data <DATA_ID>] [--remove-data <DATA_ID>...] [--add-tag <TAG_ID>...] [--remove-tag <TAG_ID>...]
 repass record [--data-dir <DIR>] remove <RECORD_ID>
 repass tag [--data-dir <DIR>] create <NAME>
@@ -83,6 +83,21 @@ Displayed metadata and revealed passwords/codes escape control characters and
 backslashes. Tag names in comma-separated lists also escape commas. Notes and
 revealed SSH keys use indented multiline blocks. These are display conventions;
 stored text is not changed, and `show --reveal` is not a raw export format.
+
+Use `--data-id <ID>` to display only one element, still masked unless `--reveal`
+is supplied. Add `--raw` to output that element's secret verbatim, without
+metadata, labels, escaping or an added newline. `--raw` requires `--data-id`
+and reveals the value even without `--reveal`. For TOTP it outputs the stored
+Base32 secret, not a generated code. For SSH it also requires
+`--ssh-part private|public`; selecting a missing part is an error. `--ssh-part`
+is only accepted with `--raw` and an SSH element.
+
+```sh
+repass record show 1 --data-id 2 --reveal
+repass record show 1 --data-id 2 --raw
+repass record show 1 --data-id 3 --raw --ssh-part private > id_ed25519
+repass record show --record-id 1 --data-id 3 --raw --ssh-part public
+```
 
 `<DATA_SOURCE>` selects one type per operation:
 
