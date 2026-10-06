@@ -3,6 +3,7 @@ use super::{
     read_record_password, success,
 };
 use crate::Result;
+use repass_storage::record::types::Timestamp;
 use repass_storage::{Data, FieldUpdate, NewRecord, RecordPatch, SshKey, Totp, TotpAlgorithm};
 use std::io::{BufRead, Write};
 
@@ -134,16 +135,8 @@ pub(super) fn execute_record(
                 writeln!(output, "Data {} ({}):", entry.id, entry.value.kind())?;
                 show_data(&entry.value, reveal, output)?;
             }
-            writeln!(
-                output,
-                "Created (Unix ms): {}",
-                record.created.as_unix_millis()
-            )?;
-            writeln!(
-                output,
-                "Updated (Unix ms): {}",
-                record.updated.as_unix_millis()
-            )?;
+            writeln!(output, "Created: {}", format_timestamp(*record.created)?)?;
+            writeln!(output, "Updated: {}", format_timestamp(*record.updated)?)?;
             Ok(())
         }
         RecordCommand::Update {
@@ -208,11 +201,52 @@ pub(super) fn execute_record(
     }
 }
 
+// Persisted timestamps cover all u64 milliseconds, beyond the calendar range.
+fn format_timestamp(timestamp: Timestamp) -> Result<String> {
+    let milliseconds = timestamp.as_unix_millis();
+    let datetime =
+        match time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(milliseconds) * 1_000_000)
+        {
+            Ok(datetime) => datetime,
+            Err(_) => {
+                return Ok(format!(
+                    "outside supported date range (Unix ms: {milliseconds})"
+                ));
+            }
+        };
+    Ok(datetime.format(time::macros::format_description!(
+        "[year]-[month]-[day] [hour]:[minute]"
+    ))?)
+}
+
 fn optional_field<T>(value: Option<T>, clear: bool) -> FieldUpdate<T> {
     if clear {
         FieldUpdate::Clear
     } else {
         value.map_or(FieldUpdate::Keep, FieldUpdate::Set)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamps_show_dates_to_the_minute_and_handle_extreme_values() {
+        for (milliseconds, expected) in [
+            (0, "1970-01-01 00:00"),
+            (1_709_164_800_123, "2024-02-29 00:00"),
+            (253_402_300_799_999, "9999-12-31 23:59"),
+        ] {
+            assert_eq!(
+                format_timestamp(Timestamp::from_unix_millis(milliseconds)).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            format_timestamp(Timestamp::from_unix_millis(u64::MAX)).unwrap(),
+            "outside supported date range (Unix ms: 18446744073709551615)"
+        );
     }
 }
 

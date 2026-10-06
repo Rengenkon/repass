@@ -757,6 +757,10 @@ mod tests {
         .unwrap();
         let masked = String::from_utf8(masked).unwrap();
         assert!(masked.contains("Password: ********"));
+        assert!(masked.contains("Created: "));
+        assert!(masked.contains("Updated: "));
+        assert!(!masked.contains(" UTC"));
+        assert!(!masked.contains("(Unix ms)"));
         assert!(!masked.contains("sensitive-password"));
 
         let mut revealed = Vec::new();

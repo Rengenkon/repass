@@ -78,6 +78,7 @@ records can also start with no data. Each element has a stable ID within its
 record. Deleted data IDs are not reused, including after reopening the vault.
 `list` and `find` show `ID:type` summaries. `show` masks all values unless
 `--reveal` is supplied; TOTP algorithm, digit count and period remain visible.
+Creation and update times are displayed as `YYYY-MM-DD HH:MM` (UTC).
 
 `<DATA_SOURCE>` selects one type per operation:
 
