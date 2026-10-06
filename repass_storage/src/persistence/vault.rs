@@ -33,6 +33,25 @@ const DATA_HEADER_LEN: usize = 8 + 2 + 2;
 const COUNTS_HEADER_LEN: usize = 8 + NONCE_LEN;
 const COUNTS_PLAINTEXT_LEN: usize = 16;
 const COUNTS_CIPHERTEXT_LEN: usize = COUNTS_PLAINTEXT_LEN + 16;
+const MAX_METADATA_BYTES: usize = HEADER_LEN + COUNTS_HEADER_LEN + COUNTS_CIPHERTEXT_LEN;
+pub(crate) const MAX_DATA_BYTES: usize = 64 * 1024 * 1024;
+
+pub(crate) fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, VaultError> {
+    let mut bytes = Vec::new();
+    let file = File::open(path)?;
+    if file.metadata()?.len() > limit as u64 {
+        return Err(VaultError::InvalidFormat("file exceeds size limit"));
+    }
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(VaultError::InvalidFormat("file exceeds size limit"));
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn read_metadata(path: &Path) -> Result<Vec<u8>, VaultError> {
+    read_bounded(path, MAX_METADATA_BYTES)
+}
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -179,9 +198,7 @@ impl Vault {
     /// Opens key metadata and verifies the wrapped data key.
     pub fn open(path: impl AsRef<Path>, master_password: &[u8]) -> Result<Self, VaultError> {
         let path = path.as_ref().to_path_buf();
-        let mut file = File::open(&path)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
+        let bytes = read_metadata(&path)?;
         if bytes.len() < METADATA_MAGIC.len() + 2 {
             return Err(VaultError::InvalidFormat("truncated metadata file"));
         }
@@ -277,16 +294,25 @@ impl Vault {
         bytes.extend_from_slice(&schema_version.to_le_bytes());
         bytes.extend_from_slice(nonce.as_slice());
         bytes.extend_from_slice(&encrypted);
+        if bytes.len() > MAX_DATA_BYTES {
+            return Err(VaultError::InvalidFormat(
+                "data file exceeds 64 MiB size limit",
+            ));
+        }
         let path = path.as_ref();
-        match fs::read(path) {
+        match read_bounded(path, MAX_DATA_BYTES) {
             Ok(previous) if self.decrypt_data(&previous, kind, schema_version).is_ok() => {
                 write_atomically(&backup_path(path), &previous).map_err(before_primary_write)?;
             }
             Ok(_) => {} // Preserve an existing good backup during explicit recovery.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                write_atomically(&backup_path(path), &bytes).map_err(before_primary_write)?;
+            Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                // A missing primary must not destroy a surviving recovery snapshot.
+                if !backup_path(path).try_exists()? {
+                    write_new_atomically(&backup_path(path), &bytes)
+                        .map_err(before_primary_write)?;
+                }
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         }
         write_atomically(path, &bytes)
     }
@@ -298,7 +324,7 @@ impl Vault {
         expected_kind: &str,
         expected_schema_version: u16,
     ) -> Result<T, VaultError> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded(path.as_ref(), MAX_DATA_BYTES)?;
         let plaintext = self.decrypt_data(&bytes, expected_kind, expected_schema_version)?;
         let (document, trailing): (DataFile<T>, _) = postcard::take_from_bytes(&plaintext)?;
         if !trailing.is_empty() {
@@ -426,7 +452,7 @@ impl Vault {
         kind: &str,
         version: u16,
     ) -> Result<(), VaultError> {
-        let backup = fs::read(backup_path(path))?;
+        let backup = read_bounded(&backup_path(path), MAX_DATA_BYTES)?;
         self.decrypt_data(&backup, kind, version)?;
         preserve_damaged(path)?;
         write_atomically(path, &backup)
@@ -673,12 +699,22 @@ pub(crate) fn preserve_damaged(path: &Path) -> Result<(), VaultError> {
     if !path.try_exists()? {
         return Ok(());
     }
-    let bytes = fs::read(path)?;
     loop {
         let id = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut name = path.as_os_str().to_os_string();
         name.push(format!(".damaged-{}-{id}", std::process::id()));
-        match write_new_atomically(Path::new(&name), &bytes) {
+        let destination = Path::new(&name);
+        let (temp, mut output) = create_temporary(destination)?;
+        let result = (|| -> Result<(), VaultError> {
+            // Preserve even oversized damaged files without loading them into RAM.
+            std::io::copy(&mut File::open(path)?, &mut output)?;
+            output.sync_all()?;
+            fs::hard_link(&temp, destination)?;
+            sync_parent(destination).map_err(VaultError::WriteCommitted)?;
+            Ok(())
+        })();
+        let _ = fs::remove_file(temp);
+        match result {
             Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 continue;
             }
@@ -743,6 +779,34 @@ fn before_primary_write(error: VaultError) -> VaultError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_file_reads_reject_oversized_input_and_metadata_before_decryption() {
+        let directory = test_directory("read-limits");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("metadata.repass");
+        fs::write(&path, b"12345").unwrap();
+        assert_eq!(read_bounded(&path, 5).unwrap(), b"12345");
+        assert!(read_bounded(&path, 4).is_err());
+        File::create(&path)
+            .unwrap()
+            .set_len(MAX_METADATA_BYTES as u64 + 1)
+            .unwrap();
+        assert!(matches!(
+            Vault::open(&path, b"password"),
+            Err(VaultError::InvalidFormat("file exceeds size limit"))
+        ));
+        let data = directory.join("records.repass");
+        File::create(&data)
+            .unwrap()
+            .set_len(MAX_DATA_BYTES as u64 + 1)
+            .unwrap();
+        assert!(matches!(
+            read_bounded(&data, MAX_DATA_BYTES),
+            Err(VaultError::InvalidFormat("file exceeds size limit"))
+        ));
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     fn test_directory(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("repass-{name}-{}", std::process::id()))

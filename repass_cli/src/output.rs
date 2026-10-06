@@ -20,6 +20,39 @@ pub fn styles() -> Styles {
         .invalid(ERROR)
 }
 
+/// Escape display controls and delimiters without changing stored values.
+pub fn text(value: &str) -> String {
+    let mut escaped = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            ch if ch.is_control()
+                || matches!(ch, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') =>
+            {
+                escaped.extend(ch.escape_default())
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+pub fn tag_text(value: &str) -> String {
+    text(value).replace(',', "\\,")
+}
+
+pub fn multiline(output: &mut impl Write, label: &str, value: &str) -> io::Result<()> {
+    writeln!(output, "{label}:")?;
+    for line in value.split('\n') {
+        writeln!(
+            output,
+            "  {}",
+            text(line.strip_suffix('\r').unwrap_or(line))
+        )?;
+    }
+    Ok(())
+}
+
 // The caller's AutoStream strips these styles for redirected output and NO_COLOR.
 pub fn styled(output: &mut impl Write, style: Style, text: impl Display) -> io::Result<()> {
     write!(output, "{style}{text}{style:#}")
@@ -27,7 +60,7 @@ pub fn styled(output: &mut impl Write, style: Style, text: impl Display) -> io::
 
 pub fn error(output: &mut impl Write, error: impl Display) -> io::Result<()> {
     styled(output, ERROR, "error:")?;
-    let message = error.to_string();
+    let message = text(&error.to_string());
     write!(output, " ")?;
     if message.starts_with("TODO:") {
         styled(output, TODO, message)?;
@@ -38,7 +71,7 @@ pub fn error(output: &mut impl Write, error: impl Display) -> io::Result<()> {
 }
 
 pub fn warning(output: &mut impl Write, message: impl Display) -> io::Result<()> {
-    styled(output, TODO, message)?;
+    styled(output, TODO, text(&message.to_string()))?;
     writeln!(output)
 }
 

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 mod generation;
+pub(crate) mod primary;
 mod records;
 
 pub use generation::generate;
@@ -88,11 +89,13 @@ pub enum Command {
     /// Generates completion for the external shell, not Tab completion inside
     /// a repass session. No vault is opened. Load the script in your shell or
     /// save it in its completion directory.
-    #[command(after_long_help = "Example (Bash):\n  source <(repass completions bash)")]
+    #[command(
+        after_long_help = "Examples (Bash):\n  source <(repass completions bash)\n  source <(repass completions --shell bash)\n\nPut SHELL immediately after the command, or use --shell in any position. Do not supply both forms."
+    )]
     Completions {
         /// Shell for which to generate the script
-        #[arg(value_enum)]
-        shell: clap_complete::Shell,
+        #[command(flatten)]
+        shell: primary::Shell,
     },
 }
 
@@ -286,8 +289,8 @@ pub enum VaultCommand {
     #[command(hide = true)]
     Switch {
         /// Directory to use for subsequent storage commands
-        #[arg(value_hint = ValueHint::DirPath)]
-        dir: PathBuf,
+        #[command(flatten)]
+        dir: primary::Directory,
     },
 }
 
@@ -299,12 +302,12 @@ pub enum RecordCommand {
     /// one data type using its input options. SSH may include a private key, a
     /// public key, or both; every supplied key field must be nonblank.
     #[command(
-        after_long_help = "Examples:\n  repass record create mail --password-stdin\n  repass record create server --host example.test --private-key-file id_ed25519 --public-key-file id_ed25519.pub\n  repass record create notes --notes 'Account details'"
+        after_long_help = "Examples:\n  repass record create mail --password-stdin\n  repass record create --tag 1 --name mail\n  repass record create server --host example.test --private-key-file id_ed25519 --public-key-file id_ed25519.pub\n  repass record create notes --notes 'Account details'\n\nPut NAME immediately after the command, or use --name in any position. Do not supply both forms."
     )]
     Create {
         /// Nonempty display name for the record
-        #[arg(help_heading = "Record fields")]
-        name: String,
+        #[command(flatten)]
+        name: primary::Name,
         #[command(flatten)]
         data: DataInput,
         /// Login or account username
@@ -362,7 +365,8 @@ pub enum RecordCommand {
     /// Show record details and data IDs, masking secret values by default
     Show {
         /// Record ID from record list or record find
-        record_id: String,
+        #[command(flatten)]
+        record_id: primary::Record,
         /// Include secret values in the output
         #[arg(long)]
         reveal: bool,
@@ -376,11 +380,12 @@ pub enum RecordCommand {
     /// elements. All changes are validated together before saving.
     #[command(
         group(clap::ArgGroup::new("data_source").args(["password_stdin", "code_stdin", "totp_stdin", "private_key_file", "private_key_stdin", "public_key_file", "public_key_stdin"]).multiple(true)),
-        after_long_help = "Examples:\n  repass record update 1 --host example.test --add-tag 2\n  repass record update 1 --password-stdin\n  repass record update 1 --replace-data 2 --private-key-file id_ed25519 --public-key-file id_ed25519.pub\n  repass record update 1 --remove-data 3 --remove-tag 2"
+        after_long_help = "Examples:\n  repass record update 1 --host example.test --add-tag 2\n  repass record update --add-tag 2 --record-id 1\n  repass record update 1 --password-stdin\n  repass record update 1 --replace-data 2 --private-key-file id_ed25519 --public-key-file id_ed25519.pub\n  repass record update 1 --remove-data 3 --remove-tag 2\n\nPut RECORD_ID immediately after the command, or use --record-id in any position. Do not supply both forms."
     )]
     Update {
         /// Record ID from record list or record find
-        record_id: String,
+        #[command(flatten)]
+        record_id: primary::Record,
         /// Replace the display name with a nonempty name
         #[arg(long)]
         name: Option<String>,
@@ -420,7 +425,8 @@ pub enum RecordCommand {
     /// Remove a record and all of its data elements
     Remove {
         /// Record ID from record list or record find
-        record_id: String,
+        #[command(flatten)]
+        record_id: primary::Record,
     },
 }
 
@@ -499,14 +505,16 @@ pub enum TagCommand {
     /// Create a tag with a unique, nonempty name
     Create {
         /// Unique, nonempty tag name
-        name: String,
+        #[command(flatten)]
+        name: primary::Name,
     },
     /// List tag IDs and names, including technical names for missing entries
     List,
     /// Remove a tag that is not used by any record
     Remove {
         /// Tag ID from tag list
-        tag_id: TagId,
+        #[command(flatten)]
+        tag_id: primary::Tag,
     },
     /// Rename a tag without changing its ID
     Rename {
@@ -542,14 +550,18 @@ pub fn execute(
             }
             Ok(())
         }
-        Command::Completions { shell } => crate::completions::generate(shell, output),
+        Command::Completions { shell } => crate::completions::generate(shell.0, output),
         Command::Vault {
             command: VaultCommand::Switch { dir },
             ..
         } if interactive => {
-            session.switch(dir)?;
+            session.switch(dir.0)?;
             output::styled(output, output::SUCCESS, "Data directory:")?;
-            writeln!(output, " {}", session.data_dir().display())?;
+            writeln!(
+                output,
+                " {}",
+                output::text(&session.data_dir().to_string_lossy())
+            )?;
             Ok(())
         }
         Command::Vault {
@@ -593,7 +605,11 @@ pub fn execute(
         } => {
             let storage = session.ensure_storage(output, interactive)?;
             let info = storage.info();
-            writeln!(output, "Data directory: {}", info.directory.display())?;
+            writeln!(
+                output,
+                "Data directory: {}",
+                output::text(&info.directory.to_string_lossy())
+            )?;
             writeln!(output, "Records: {}", info.record_count)?;
             writeln!(output, "Tags: {}", info.tag_count)?;
             if let Some(warning) = info.metadata_warning {
@@ -610,9 +626,11 @@ pub fn execute(
                     output,
                     "Tag catalog: missing (unknown IDs use technical names)"
                 )?,
-                repass_storage::TagCatalogStatus::Unavailable(reason) => {
-                    writeln!(output, "Tag catalog: unavailable ({reason})")?
-                }
+                repass_storage::TagCatalogStatus::Unavailable(reason) => writeln!(
+                    output,
+                    "Tag catalog: unavailable ({})",
+                    output::text(&reason)
+                )?,
             }
             Ok(())
         }
@@ -662,8 +680,8 @@ fn read_record_password(
         output.flush()?;
         return Ok(session.read_secret()?);
     }
-    let mut password = String::new();
-    if input.read_line(&mut password)? == 0 {
+    let mut password = crate::input::read_line(input, crate::input::MAX_TEXT_BYTES)?;
+    if password.is_empty() {
         return Err("expected a password line on stdin".into());
     }
     if password.ends_with('\n') {
@@ -676,7 +694,7 @@ fn read_record_password(
 }
 
 fn success(output: &mut impl Write, message: impl std::fmt::Display) -> Result<()> {
-    output::styled(output, output::SUCCESS, message)?;
+    output::styled(output, output::SUCCESS, output::text(&message.to_string()))?;
     writeln!(output)?;
     Ok(())
 }
@@ -805,6 +823,11 @@ mod tests {
         let storage = Storage::open_in(&directory.0, b"master").unwrap();
         assert!(storage.list_tags()[0].is_technical());
         let mut session = Session::with_storage(directory.0.clone(), storage);
+        session
+            .ensure_storage(&mut Vec::new(), false)
+            .unwrap()
+            .recover_tags()
+            .unwrap();
         execute(
             Command::Tag {
                 data_dir: None,
@@ -872,7 +895,7 @@ mod tests {
             Command::Record {
                 data_dir: None,
                 command: RecordCommand::Update {
-                    record_id: id.to_string(),
+                    record_id: id.to_string().into(),
                     name: None,
                     username: None,
                     host: None,
@@ -1296,6 +1319,121 @@ mod tests {
     }
 
     #[test]
+    fn metadata_and_revealed_secrets_do_not_emit_terminal_controls() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let tag = storage.create_tag("work,\t\u{1b}[31m").unwrap();
+        storage
+            .create_record(NewRecord {
+                name: "mail\nforged\t\u{1b}[2J".into(),
+                username: Some("alice\r\u{202e}".into()),
+                host: None,
+                notes: Some("first\nsecond\u{1b}[31m".into()),
+                tags: vec![tag],
+                data: vec![Data::Password("pass\u{1b}[2J".into())],
+            })
+            .unwrap();
+        let mut session = Session::with_storage(directory.0.clone(), storage);
+        let listed = run_record_line("list", "", &mut session, false).unwrap();
+        assert_eq!(listed.lines().count(), 1);
+        assert_eq!(listed.split('\t').count(), 6);
+        for line in ["list", "show 1 --reveal"] {
+            let shown = run_record_line(line, "", &mut session, false).unwrap();
+            assert!(!shown.contains('\u{1b}'));
+            assert!(!shown.contains('\r'));
+            assert!(!shown.contains('\u{202e}'));
+            assert!(shown.contains("\\u{1b}"));
+        }
+        let shown = run_record_line("show 1", "", &mut session, false).unwrap();
+        assert!(shown.contains("Notes:\n  first\n  second\\u{1b}[31m"));
+        let raw = session
+            .ensure_storage(&mut Vec::new(), false)
+            .unwrap()
+            .get_record(RecordId::new(1))
+            .unwrap();
+        assert_eq!(raw.name, "mail\nforged\t\u{1b}[2J");
+        assert!(matches!(&raw.data()[0].value, Data::Password(value) if value == "pass\u{1b}[2J"));
+    }
+
+    #[test]
+    fn primary_values_support_named_forms_and_enforce_positional_order() {
+        for line in [
+            "record create mail --tag 1",
+            "record create --tag 1 --name mail",
+            "record create --name=mail --tag 1",
+            "record create create",
+            "record --data-dir other create mail",
+            "record show 1 --reveal",
+            "record show --reveal --record-id 1",
+            "record update --add-tag 2 --record-id 1",
+            "record remove --record-id 1",
+            "tag create --name work",
+            "tag remove --tag-id 2",
+            "completions --shell bash",
+        ] {
+            let mut args = vec!["repass".to_owned()];
+            args.extend(shlex::split(line).unwrap());
+            assert!(Cli::try_parse_from(args).is_ok(), "{line}");
+        }
+        for line in [
+            "record create --username alice mail",
+            "record create --tag 1 mail",
+            "record show --reveal 1",
+            "record create mail --name other",
+            "record show 1 --record-id 1",
+            "tag create work --name work",
+            "tag remove 2 --tag-id 2",
+            "completions bash --shell bash",
+        ] {
+            let mut args = vec!["repass".to_owned()];
+            args.extend(shlex::split(line).unwrap());
+            assert!(Cli::try_parse_from(args).is_err(), "{line}");
+        }
+    }
+
+    #[test]
+    fn invalid_targets_are_rejected_before_consuming_a_new_secret() {
+        let directory = TestDirectory::new();
+        let storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let mut session = Session::with_storage(directory.0.clone(), storage);
+        run_record_line(
+            "create mail --password-stdin",
+            "first\n",
+            &mut session,
+            false,
+        )
+        .unwrap();
+        for line in [
+            "update 1 --replace-data 999 --password-stdin",
+            "update 1 --add-tag 999 --password-stdin",
+            "update 1 --remove-data 999 --password-stdin",
+            "update 1 --remove-data 1 1 --password-stdin",
+            "create mail --tag 999 --password-stdin",
+        ] {
+            let mut args = vec!["repass".to_owned(), "record".to_owned()];
+            args.extend(shlex::split(line).unwrap());
+            let command = Cli::try_parse_from(args).unwrap().command.unwrap();
+            let mut input = Cursor::new("unconsumed\n");
+            assert!(execute(command, &mut session, &mut input, &mut Vec::new(), false).is_err());
+            assert_eq!(input.position(), 0, "{line}");
+        }
+        // Also prove that hidden terminal input is not requested.
+        session.close();
+        let mut session =
+            Session::with_passwords(directory.0.clone(), ["master".into(), "new-secret".into()]);
+        assert!(
+            run_record_line(
+                "update 1 --replace-data 999 --password-stdin",
+                "",
+                &mut session,
+                true
+            )
+            .is_err()
+        );
+        assert_eq!(session.read_secret().unwrap(), "new-secret");
+    }
+
+    #[test]
     fn single_required_values_are_positional_and_old_commands_are_rejected() {
         for words in [
             vec!["record", "create", "My mail"],
@@ -1315,9 +1453,7 @@ mod tests {
         }
         for line in [
             "record add --name mail",
-            "record create --name mail",
             "tag add --name work",
-            "tag create --name work",
             "record delete 1",
             "tag delete 1",
             "record data-add 1 --password-stdin",

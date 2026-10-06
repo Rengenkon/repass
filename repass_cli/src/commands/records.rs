@@ -2,9 +2,12 @@ use super::{
     DataInput, RecordCommand, Session, TagCommand, TotpAlgorithmArg, parse_record_id,
     read_record_password, success,
 };
-use crate::Result;
+use crate::{Result, output};
 use repass_storage::record::types::Timestamp;
-use repass_storage::{Data, FieldUpdate, NewRecord, RecordPatch, SshKey, Totp, TotpAlgorithm};
+use repass_storage::{
+    Data, FieldUpdate, NewRecord, RecordPatch, SshKey, StorageError, Totp, TotpAlgorithm,
+};
+use std::collections::HashSet;
 use std::io::{BufRead, Write};
 
 pub(super) fn execute_record(
@@ -23,14 +26,26 @@ pub(super) fn execute_record(
             notes,
             tag,
         } => {
-            session.ensure_storage(output, interactive)?;
+            let storage = session.ensure_storage(output, interactive)?;
+            if name.is_empty() {
+                return Err("record name cannot be empty".into());
+            }
+            let mut seen = HashSet::new();
+            for id in &tag {
+                if storage.get_tag(*id).is_none() {
+                    return Err(StorageError::TagNotFound(*id).into());
+                }
+                if !seen.insert(*id) {
+                    return Err(StorageError::DuplicateTagId(*id).into());
+                }
+            }
             let data = read_data(data, session, input, output, interactive)?
                 .into_iter()
                 .collect();
             let id = session
                 .ensure_storage(output, interactive)?
                 .create_record(NewRecord {
-                    name,
+                    name: name.0,
                     data,
                     username,
                     host,
@@ -73,9 +88,9 @@ pub(super) fn execute_record(
                             .get_tag(*id)
                             .map(|tag| {
                                 if tag.is_technical() {
-                                    format!("{}:{} (technical)", id, tag.name())
+                                    format!("{}:{} (technical)", id, output::tag_text(tag.name()))
                                 } else {
-                                    format!("{}:{}", id, tag.name())
+                                    format!("{}:{}", id, output::tag_text(tag.name()))
                                 }
                             })
                             .unwrap_or_else(|| format!("{id}:#tag-{id} (technical)"))
@@ -86,8 +101,8 @@ pub(super) fn execute_record(
                     output,
                     "{}\t{}\t{}\t{}\t{}\t{}",
                     record.id,
-                    record.name,
-                    record.username.unwrap_or(""),
+                    output::text(record.name),
+                    output::text(record.username.unwrap_or("")),
                     tag_names,
                     record.host.map(ToString::to_string).unwrap_or_default(),
                     record
@@ -105,14 +120,18 @@ pub(super) fn execute_record(
             let storage = session.ensure_storage(output, interactive)?;
             let record = storage.get_record(id)?;
             writeln!(output, "ID: {}", record.id)?;
-            writeln!(output, "Name: {}", record.name)?;
-            writeln!(output, "Username: {}", record.username.unwrap_or(""))?;
+            writeln!(output, "Name: {}", output::text(record.name))?;
+            writeln!(
+                output,
+                "Username: {}",
+                output::text(record.username.unwrap_or(""))
+            )?;
             writeln!(
                 output,
                 "Host: {}",
                 record.host.map(ToString::to_string).unwrap_or_default()
             )?;
-            writeln!(output, "Notes: {}", record.notes.unwrap_or(""))?;
+            output::multiline(output, "Notes", record.notes.unwrap_or(""))?;
             let tag_names = record
                 .tags
                 .iter()
@@ -121,9 +140,9 @@ pub(super) fn execute_record(
                         .get_tag(*id)
                         .map(|tag| {
                             if tag.is_technical() {
-                                format!("{} (technical)", tag.name())
+                                format!("{} (technical)", output::tag_text(tag.name()))
                             } else {
-                                tag.name().to_owned()
+                                output::tag_text(tag.name())
                             }
                         })
                         .unwrap_or_else(|| format!("#tag-{id}"))
@@ -158,9 +177,34 @@ pub(super) fn execute_record(
             if replace_data.is_some_and(|data_id| remove_data.contains(&data_id)) {
                 return Err("cannot replace and remove the same data element".into());
             }
-            session
-                .ensure_storage(output, interactive)?
-                .get_record(id)?;
+            let storage = session.ensure_storage(output, interactive)?;
+            let record = storage.get_record(id)?;
+            if name.as_ref().is_some_and(String::is_empty) {
+                return Err("record name cannot be empty".into());
+            }
+            for tags in [&add_tag, &remove_tag] {
+                let mut seen = HashSet::new();
+                for tag in tags {
+                    if storage.get_tag(*tag).is_none() {
+                        return Err(StorageError::TagNotFound(*tag).into());
+                    }
+                    if !seen.insert(*tag) {
+                        return Err(StorageError::DuplicateTagId(*tag).into());
+                    }
+                }
+            }
+            if let Some(tag) = add_tag.iter().find(|tag| remove_tag.contains(tag)) {
+                return Err(StorageError::ConflictingTagUpdate(*tag).into());
+            }
+            let mut touched = HashSet::new();
+            for data_id in replace_data.iter().chain(&remove_data) {
+                if !touched.insert(*data_id) {
+                    return Err(StorageError::ConflictingDataUpdate(*data_id).into());
+                }
+                if !record.data().iter().any(|entry| entry.id == *data_id) {
+                    return Err(StorageError::DataNotFound(*data_id).into());
+                }
+            }
             let value = read_data(data, session, input, output, interactive)?;
             let mut add_data = Vec::new();
             let mut replacements = Vec::new();
@@ -262,8 +306,8 @@ fn read_secret_line(
         output.flush()?;
         return Ok(session.read_secret()?);
     }
-    let mut text = String::new();
-    if input.read_line(&mut text)? == 0 {
+    let mut text = crate::input::read_line(input, crate::input::MAX_TEXT_BYTES)?;
+    if text.is_empty() {
         return Err(format!("expected {label} on stdin").into());
     }
     if text.ends_with('\n') {
@@ -283,8 +327,7 @@ fn read_key(
 ) -> Result<String> {
     let mut key = String::new();
     if !interactive {
-        input.read_to_string(&mut key)?;
-        return Ok(key);
+        return Ok(crate::input::read_text(input)?);
     }
     writeln!(
         output,
@@ -292,12 +335,15 @@ fn read_key(
     )?;
     output.flush()?;
     loop {
-        let mut line = String::new();
-        if input.read_line(&mut line)? == 0 {
+        let line = crate::input::read_line(input, crate::input::MAX_TEXT_BYTES - key.len() + 3)?;
+        if line.is_empty() {
             return Err("input ended before the SSH key terminator '.'".into());
         }
         if line.trim_end_matches(['\r', '\n']) == "." {
             break;
+        }
+        if key.len() + line.len() > crate::input::MAX_TEXT_BYTES {
+            return Err("SSH key exceeds 1 MiB size limit".into());
         }
         key.push_str(&line);
     }
@@ -328,6 +374,12 @@ fn read_data(
             "only one SSH field can read stdin until EOF; use a file for the other field".into(),
         );
     }
+    if args.digits.is_some_and(|digits| !(6..=8).contains(&digits)) {
+        return Err("TOTP digits must be between 6 and 8".into());
+    }
+    if args.period == Some(0) {
+        return Err("TOTP period must be positive".into());
+    }
     let value = if args.password_stdin {
         Data::Password(read_record_password(session, input, output, interactive)?)
     } else if args.code_stdin {
@@ -353,14 +405,14 @@ fn read_data(
         )?)
     } else if ssh {
         let private_key = match args.private_key_file {
-            Some(path) => Some(std::fs::read_to_string(path)?),
+            Some(path) => Some(crate::input::read_file(&path)?),
             None if args.private_key_stdin => {
                 Some(read_key("Private SSH key", input, output, interactive)?)
             }
             None => None,
         };
         let public_key = match args.public_key_file {
-            Some(path) => Some(std::fs::read_to_string(path)?),
+            Some(path) => Some(crate::input::read_file(&path)?),
             None if args.public_key_stdin => {
                 Some(read_key("Public SSH key", input, output, interactive)?)
             }
@@ -379,20 +431,32 @@ fn show_data(data: &Data, reveal: bool, output: &mut impl Write) -> Result<()> {
         Data::Password(value) => writeln!(
             output,
             "Password: {}",
-            if reveal { value } else { "********" }
+            if reveal {
+                output::text(value)
+            } else {
+                "********".into()
+            }
         )?,
-        Data::Code(value) => writeln!(output, "Code: {}", if reveal { value } else { "********" })?,
+        Data::Code(value) => writeln!(
+            output,
+            "Code: {}",
+            if reveal {
+                output::text(value)
+            } else {
+                "********".into()
+            }
+        )?,
         Data::SshKey(key) => {
             for (label, value) in [
                 ("Private SSH key", &key.private_key),
                 ("Public SSH key", &key.public_key),
             ] {
                 if let Some(value) = value {
-                    writeln!(
-                        output,
-                        "{label}: {}",
-                        if reveal { value } else { "********" }
-                    )?;
+                    if reveal {
+                        output::multiline(output, label, value)?;
+                    } else {
+                        writeln!(output, "{label}: ********")?;
+                    }
                 }
             }
         }
@@ -422,16 +486,21 @@ pub(super) fn execute_tag(
         TagCommand::Create { name } => {
             let id = session
                 .ensure_storage(output, interactive)?
-                .create_tag(name)?;
+                .create_tag(name.0)?;
             success(output, format_args!("Tag created with ID {id}"))
         }
         TagCommand::List => {
             let storage = session.ensure_storage(output, interactive)?;
             for tag in storage.list_tags() {
                 if tag.is_technical() {
-                    writeln!(output, "{}\t{}\t(technical)", tag.id(), tag.name())?;
+                    writeln!(
+                        output,
+                        "{}\t{}\t(technical)",
+                        tag.id(),
+                        output::text(tag.name())
+                    )?;
                 } else {
-                    writeln!(output, "{}\t{}", tag.id(), tag.name())?;
+                    writeln!(output, "{}\t{}", tag.id(), output::text(tag.name()))?;
                 }
             }
             Ok(())
@@ -439,8 +508,8 @@ pub(super) fn execute_tag(
         TagCommand::Remove { tag_id } => {
             session
                 .ensure_storage(output, interactive)?
-                .delete_tag(tag_id)?;
-            success(output, format_args!("Tag {tag_id} removed"))
+                .delete_tag(tag_id.0)?;
+            success(output, format_args!("Tag {} removed", tag_id.0))
         }
         TagCommand::Rename { tag_id, name } => {
             session

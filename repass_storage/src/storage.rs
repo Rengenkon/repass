@@ -167,7 +167,14 @@ impl Storage {
             }
             Err(crate::VaultError::Io(error)) if error.kind() == io::ErrorKind::NotFound => (
                 Tags::from_catalog([], used_tag_ids.iter().copied(), Some(0.into()))?,
-                TagCatalogStatus::Missing,
+                if saved_counts.tags != 0
+                    || !used_tag_ids.is_empty()
+                    || path_exists(&backup_path(&directory.join(TAGS_FILE)))?
+                {
+                    TagCatalogStatus::Unavailable("tag catalog is missing; use vault recover to restore its backup or tag recover to rebuild technical names".into())
+                } else {
+                    TagCatalogStatus::Missing
+                },
             ),
             Err(error) => (
                 Tags::from_catalog([], used_tag_ids.iter().copied(), Some(0.into()))?,
@@ -482,7 +489,7 @@ impl Storage {
         }
         if restore_metadata {
             preserve_damaged(&metadata)?;
-            let bytes = fs::read(backup_path(&metadata))?;
+            let bytes = crate::persistence::vault::read_metadata(&backup_path(&metadata))?;
             crate::persistence::vault::write_recovered(&metadata, &bytes)?;
         }
         Self::open_locked(directory, password, lock)
@@ -1343,6 +1350,31 @@ mod tests {
     }
 
     #[test]
+    fn missing_tag_catalog_keeps_backup_and_blocks_ordinary_writes() {
+        let directory = TestDirectory::new();
+        let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
+        let tag = storage.create_tag("work").unwrap();
+        storage.create_record(record("mail", vec![tag])).unwrap();
+        let backup = backup_path(&directory.0.join(TAGS_FILE));
+        let before = fs::read(&backup).unwrap();
+        fs::remove_file(directory.0.join(TAGS_FILE)).unwrap();
+        drop(storage);
+        let mut storage = Storage::open_in(&directory.0, b"master").unwrap();
+        assert!(storage.create_tag("new").is_err());
+        assert!(storage.rename_tag(tag, "new").is_err());
+        assert_eq!(fs::read(&backup).unwrap(), before);
+        drop(storage);
+        let restored = Storage::recover_in(&directory.0, b"master").unwrap();
+        assert_eq!(restored.get_tag(tag).unwrap().name(), "work");
+        drop(restored);
+        fs::remove_file(directory.0.join(TAGS_FILE)).unwrap();
+        let mut storage = Storage::open_in(&directory.0, b"master").unwrap();
+        storage.recover_tags().unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), before);
+        assert!(!storage.get_tag(tag).unwrap().is_technical());
+    }
+
+    #[test]
     fn missing_tag_file_creates_technical_tags_and_rename_persists_one() {
         let directory = TestDirectory::new();
         let mut storage = Storage::create_in(&directory.0, b"master").unwrap();
@@ -1351,13 +1383,18 @@ mod tests {
         fs::remove_file(directory.0.join(TAGS_FILE)).unwrap();
         drop(storage);
         let mut reopened = Storage::open_in(&directory.0, b"master").unwrap();
-        assert_eq!(reopened.tag_catalog_status(), &TagCatalogStatus::Missing);
+        assert!(matches!(
+            reopened.tag_catalog_status(),
+            TagCatalogStatus::Unavailable(_)
+        ));
         let technical = reopened.list_tags();
         assert_eq!(technical.len(), 1);
         assert_eq!(technical[0].id(), tag);
         assert_eq!(technical[0].name(), format!("#tag-{tag}"));
         assert!(technical[0].is_technical());
 
+        assert!(reopened.rename_tag(tag, "renamed").is_err());
+        reopened.recover_tags().unwrap();
         reopened.rename_tag(tag, "renamed").unwrap();
         drop(reopened);
         let reopened = Storage::open_in(&directory.0, b"master").unwrap();
@@ -1422,6 +1459,7 @@ mod tests {
             .unwrap();
         drop(storage);
         let mut reopened = Storage::open_in(&directory.0, b"master").unwrap();
+        reopened.recover_tags().unwrap();
         assert_eq!(reopened.create_tag("new").unwrap(), TagId::new(13));
     }
 

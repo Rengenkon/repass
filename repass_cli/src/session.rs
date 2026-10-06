@@ -107,7 +107,14 @@ impl Session {
     }
 
     pub(crate) fn read_secret(&mut self) -> io::Result<String> {
-        self.secret_input.read_secret()
+        let secret = self.secret_input.read_secret()?;
+        if secret.len() > crate::input::MAX_TEXT_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "secret exceeds 1 MiB size limit",
+            ));
+        }
+        Ok(secret)
     }
 
     pub fn data_dir(&self) -> &Path {
@@ -149,7 +156,9 @@ impl Session {
             if let TagCatalogStatus::Unavailable(reason) = storage.tag_catalog_status() {
                 output::warning(
                     output_stream,
-                    format!("tag catalog unavailable: {reason}; use `tag recover` to rebuild it"),
+                    format!(
+                        "tag catalog unavailable: {reason}; use `vault recover` to restore a backup or `tag recover` to rebuild technical names"
+                    ),
                 )?;
             }
             self.storage = Some(storage);
@@ -205,12 +214,19 @@ impl Session {
         interactive: bool,
     ) -> Result<()> {
         self.ensure_storage(output_stream, interactive)?;
-        write!(output_stream, "New master password: ")?;
-        output_stream.flush()?;
-        let mut password = self.read_secret()?.into_bytes();
-        write!(output_stream, "Confirm new master password: ")?;
-        output_stream.flush()?;
-        let confirmation = self.read_secret();
+        let mut password = read_secret_prompt(
+            self.secret_input.as_mut(),
+            output_stream,
+            interactive,
+            "New master password: ",
+        )?
+        .into_bytes();
+        let confirmation = read_secret_prompt(
+            self.secret_input.as_mut(),
+            output_stream,
+            interactive,
+            "Confirm new master password: ",
+        );
         let result = match confirmation {
             Ok(value) => {
                 let mut confirmation = value.into_bytes();
@@ -306,7 +322,11 @@ fn read_secret_prompt(
         write!(io::stderr(), "{prompt}")?;
         io::stderr().flush()?;
     }
-    Ok(secret_input.read_secret()?)
+    let secret = secret_input.read_secret()?;
+    if secret.len() > crate::input::MAX_TEXT_BYTES {
+        return Err("secret exceeds 1 MiB size limit".into());
+    }
+    Ok(secret)
 }
 
 #[cfg(test)]
@@ -315,6 +335,21 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn one_shot_password_change_does_not_write_prompts_to_stdout() {
+        let directory = TestDirectory::new();
+        Storage::create_in(&directory.0, b"old").unwrap();
+        let mut session = Session::with_passwords(
+            directory.0.clone(),
+            ["old".into(), "new".into(), "new".into()],
+        );
+        let mut stdout = Vec::new();
+        session.change_master_password(&mut stdout, false).unwrap();
+        assert!(stdout.is_empty());
+        session.close();
+        assert!(Storage::open_in(&directory.0, b"new").is_ok());
+    }
 
     struct TestDirectory(PathBuf);
 

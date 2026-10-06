@@ -1,5 +1,6 @@
 mod commands;
 mod completions;
+mod input;
 mod interactive;
 mod output;
 mod session;
@@ -29,7 +30,7 @@ fn run() -> Result<()> {
         return Err("vault switch is available only in interactive mode".into());
     }
     match command {
-        Command::Completions { shell } => completions::generate(shell, &mut io::stdout().lock()),
+        Command::Completions { shell } => completions::generate(shell.0, &mut io::stdout().lock()),
         Command::Generate(args) => run_generate(args),
         Command::Interactive(args) => {
             let mut session = session::Session::new(session::resolve_data_dir(data_dir)?);

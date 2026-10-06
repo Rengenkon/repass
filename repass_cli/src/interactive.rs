@@ -43,6 +43,14 @@ fn schema() -> clap::Command {
 }
 
 fn optional_arguments(command: clap::Command) -> clap::Command {
+    let command = if command
+        .get_groups()
+        .any(|group| group.get_id() == commands::primary::GROUP)
+    {
+        command.mut_group(commands::primary::GROUP, |group| group.required(false))
+    } else {
+        command
+    };
     command
         .mut_args(|arg| {
             let arg = arg.required(false);
@@ -113,6 +121,24 @@ struct Missing {
 }
 
 fn missing_arguments(command: &clap::Command, matches: &ArgMatches, missing: &mut Vec<Missing>) {
+    if let Some(group) = command
+        .get_groups()
+        .find(|group| group.get_id() == commands::primary::GROUP)
+    {
+        let ids: Vec<_> = group.get_args().collect();
+        if !ids.iter().any(|id| matches.contains_id(id.as_str())) {
+            let named = command
+                .get_arguments()
+                .find(|arg| ids.contains(&arg.get_id()) && arg.get_long().is_some());
+            if let Some(arg) = named {
+                missing.push(Missing {
+                    name: arg.get_id().to_string(),
+                    long: arg.get_long().map(str::to_owned),
+                    flag: false,
+                });
+            }
+        }
+    }
     for arg in command.get_arguments() {
         if arg.is_required_set()
             || (arg.get_id().as_str() == "length"
@@ -170,8 +196,8 @@ fn parse(words: Vec<String>, input: &mut impl BufRead, output: &mut impl Write) 
                 format_args!("{}: ", arg.long.as_deref().unwrap_or(&arg.name)),
             )?;
             output.flush()?;
-            let mut value = String::new();
-            if input.read_line(&mut value)? == 0 {
+            let mut value = crate::input::read_line(input, crate::input::MAX_TEXT_BYTES)?;
+            if value.is_empty() {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "input ended while requesting an argument",
@@ -219,8 +245,8 @@ pub fn run(session: &mut Session, input: &mut impl BufRead, output: &mut impl Wr
     loop {
         output::styled(output, output::PROMPT, "repass> ")?;
         output.flush()?;
-        let mut line = String::new();
-        if input.read_line(&mut line)? == 0 {
+        let line = crate::input::read_line(input, crate::input::MAX_TEXT_BYTES)?;
+        if line.is_empty() {
             break;
         }
         let Some(words) = shlex::split(&line) else {
@@ -317,8 +343,7 @@ mod tests {
             }
             if suffix == " record update" {
                 let text = help.to_string();
-                assert!(text.contains("<RECORD_ID>"));
-                assert!(!text.contains("[RECORD_ID]"));
+                assert!(text.contains("<RECORD_ID|--record-id <RECORD_ID>>"));
                 assert!(text.contains(SESSION_INPUT_HELP));
                 assert!(text.contains("line containing only '.'"));
                 assert!(!text.contains("stdin until EOF"));
@@ -351,7 +376,7 @@ mod tests {
             .unwrap();
             assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
             let text = error.to_string();
-            assert!(text.contains("<RECORD_ID>"));
+            assert!(text.contains("<RECORD_ID|--record-id <RECORD_ID>>"));
             assert!(!text.contains("--data-dir"));
             assert!(text.contains(SESSION_INPUT_HELP));
             assert!(output.is_empty());
@@ -432,8 +457,53 @@ mod tests {
             Command::Tag {
                 command: commands::TagCommand::Remove { tag_id },
                 ..
-            } if tag_id == 42.into()
+            } if tag_id.0 == 42.into()
         ));
+    }
+
+    #[test]
+    fn primary_named_forms_and_prompting_work_with_options() {
+        for line in [
+            "record create --tag 1 --name 'My mail'",
+            "record show --reveal --record-id 1",
+            "tag create --name work",
+            "tag remove --tag-id 2",
+            "vault switch --dir other",
+            "completions --shell bash",
+        ] {
+            let mut output = Vec::new();
+            assert!(
+                parse(
+                    shlex::split(line).unwrap(),
+                    &mut Cursor::new(""),
+                    &mut output
+                )
+                .is_ok(),
+                "{line}"
+            );
+            assert!(output.is_empty());
+        }
+        let mut output = Vec::new();
+        let command = parse(
+            shlex::split("record create --tag 1").unwrap(),
+            &mut Cursor::new("My mail\n"),
+            &mut output,
+        )
+        .unwrap();
+        assert!(
+            matches!(command, Command::Record { command: commands::RecordCommand::Create { name, tag, .. }, .. } if name == "My mail" && tag == vec![1.into()])
+        );
+        assert!(String::from_utf8(output).unwrap().contains("name: "));
+        let error = parse(
+            shlex::split("record show --reveal 1").unwrap(),
+            &mut Cursor::new(""),
+            &mut Vec::new(),
+        )
+        .err()
+        .unwrap();
+        let error = error.downcast_ref::<clap::Error>().unwrap();
+        assert!(error.to_string().contains("otherwise use --record-id"));
+        assert!(error.to_string().ends_with('\n'));
     }
 
     #[test]

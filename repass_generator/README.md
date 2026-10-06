@@ -42,6 +42,10 @@ A `Dictionary` provides the non-empty strings that can be selected during genera
 
 Empty dictionaries and empty entries are rejected. Duplicate values from file/entry constructors and custom additions are rejected; overlapping built-in preset selections are combined as a unique set. Every dictionary is validated again when building its cache.
 
+File loading and saving are limited to 16 MiB of UTF-8 text and 100,000 nonempty
+entries. Oversized files are rejected, and a rejected save preserves the existing
+destination. The byte limit includes line endings.
+
 ### Query and length
 
 `Query` combines a `PasswordLength`, a `DictionaryCache`, a `Separator`, and `GenerationLimits`. Construction validates the length, dictionary, and separator.

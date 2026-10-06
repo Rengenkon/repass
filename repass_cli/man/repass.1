@@ -35,6 +35,31 @@ for a compact summary and
 .B \-\-help
 for detailed command help and examples.
 This is a personal, educational project.
+.SH PRIMARY ARGUMENTS
+For commands with one required value, put it immediately after the command,
+or supply its named form anywhere among that command's arguments:
+.TP
+.B record create, tag create
+NAME or \-\-name NAME.
+.TP
+.B record show, record update, record remove
+RECORD_ID or \-\-record-id RECORD_ID.
+.TP
+.B tag remove
+TAG_ID or \-\-tag-id TAG_ID.
+.TP
+.B vault switch
+DIR or \-\-dir DIR (session only).
+.TP
+.B completions
+SHELL or \-\-shell SHELL.
+.PP
+Supplying both forms is an error. For example:
+.nf
+repass record create mail \-\-tag 1
+repass record create \-\-tag 1 \-\-name mail
+repass record show \-\-reveal \-\-record-id 1
+.fi
 .SH VAULT DIRECTORY AND PASSWORD INPUT
 .B \-\-data-dir DIR
 is available on vault, record, tag and interactive commands. Directory
@@ -46,6 +71,8 @@ A leading tilde path component expands to HOME; an empty selected directory
 is rejected. Generation and completion do not require a data directory.
 .PP
 Storage commands request the master password through hidden terminal input.
+In one-shot mode, all master-password prompts go to stderr, including new
+password and confirmation prompts during a password change.
 When no vault exists, ordinary storage commands, including
 .BR "vault info" ,
 create one after requesting a nonempty password and confirmation.
@@ -162,6 +189,9 @@ Without a query, use exact filters and order by ID.
 Show metadata and data IDs. Mask data values unless explicitly revealed.
 TOTP algorithm, digits and period remain visible.
 Creation and update times use YYYY-MM-DD HH:MM (UTC).
+Metadata and revealed passwords/codes escape control characters and backslashes;
+comma-separated tag names also escape commas. Notes and revealed SSH keys use
+indented multiline blocks. Stored values are unchanged; this is not raw export.
 .TP
 .B record update RECORD_ID [options]
 Change only supplied fields. Accept
@@ -181,6 +211,8 @@ Each field-removal flag conflicts with setting that field.
 A data source without \-\-replace-data always adds a new element, including
 when passwords already exist. Fields, tags and data can be changed together;
 all changes are validated before saving one record update.
+After decryption, target IDs and operation conflicts are checked before new
+secret input is requested. The new value itself is validated after input.
 .TP
 .B record remove RECORD_ID
 Remove the record and all its data elements.
@@ -274,7 +306,8 @@ entered separately in this mode.
 .TP
 .B help [COMMAND...], h [COMMAND...]
 Show help; for example, help record update.
-Required argument markers remain visible even though omitted values are prompted.
+Help shows a required choice between positional and named forms. Omitting both
+prompts for the value.
 .TP
 .B vault switch DIR
 Close the current vault and select another directory. Open it lazily on the
@@ -427,6 +460,20 @@ single transaction. Counts are reconciled against readable data on open.
 A missing or unreadable tag catalog does not prevent access to records;
 unnamed referenced tags appear as technical names. Ordinary tag operations
 do not overwrite a damaged catalog.
+If a missing catalog has saved counts, record references or a surviving backup,
+ordinary catalog writes require explicit recovery first. A never-created
+catalog remains writable. Rebuilding a missing primary preserves its existing
+backup.
+.SS Input and file limits
+Metadata reads use the fixed maximum size of the current format. Encrypted
+record/tag files and backups are limited to 64 MiB on read and save; oversized
+existing files are rejected. Each SSH part is limited to 1 MiB. One-shot secret
+lines and interactive command/argument lines are limited to 1 MiB including
+line endings. Hidden terminal secrets are checked against 1 MiB after input
+returns. Dictionary files are limited to 16 MiB and 100,000 nonempty entries
+on load and save. Limits count bytes. Damaged originals are streamed to disk
+during recovery without loading the entire file into memory.
+.PP
 .PP
 Only current storage formats are accepted. Older formats, including
 password-only record schema 1 and legacy vault.repass files, are not migrated.

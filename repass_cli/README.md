@@ -62,8 +62,8 @@ Optional arguments are not prompted. Use `h` or `help` for help (including
 `exit` is not a supported command.
 The `interactive` command is unavailable and absent from help inside a session.
 Use `-h` for a compact summary and `--help` for full descriptions and examples.
-Session help keeps required arguments marked as required: omitting them prompts
-for their values. Input instructions and examples in session help use session
+Session help shows the required choice between positional and named forms;
+omitting both prompts for a value. Input instructions and examples use session
 syntax; SSH input ends with a line containing only `.`.
 
 Inside a session, ordinary commands cannot accept `--data-dir`. Use
@@ -79,6 +79,10 @@ record. Deleted data IDs are not reused, including after reopening the vault.
 `list` and `find` show `ID:type` summaries. `show` masks all values unless
 `--reveal` is supplied; TOTP algorithm, digit count and period remain visible.
 Creation and update times are displayed as `YYYY-MM-DD HH:MM` (UTC).
+Displayed metadata and revealed passwords/codes escape control characters and
+backslashes. Tag names in comma-separated lists also escape commas. Notes and
+revealed SSH keys use indented multiline blocks. These are display conventions;
+stored text is not changed, and `show --reveal` is not a raw export format.
 
 `<DATA_SOURCE>` selects one type per operation:
 
@@ -130,7 +134,25 @@ Tags can also be attached at creation with `record create mail --tag 2`.
 Commands with one required value take it positionally: `record create <NAME>`,
 `tag create <NAME>`, `record show/update/remove <RECORD_ID>`,
 `tag remove <TAG_ID>`, `vault switch <DIR>` (session only), and
-`completions <SHELL>`. Quote names containing spaces.
+`completions <SHELL>`. Quote names containing spaces. The positional value must
+immediately follow the command. If it follows options, use its named form:
+`--name`, `--record-id`, `--tag-id`, `--dir`, or `--shell`, respectively.
+The named form can appear anywhere among that command's arguments; supplying
+both forms is an error.
+
+```text
+repass record create mail --tag 1
+repass record create --tag 1 --name mail
+repass record show 1 --reveal
+repass record show --reveal --record-id 1
+repass record update --add-tag 2 --record-id 1
+repass tag create --name work
+repass completions --shell bash
+```
+
+After opening and decrypting the vault, record mutation commands check the
+target record, data IDs, tag IDs and conflicting operations before requesting
+new secret input. New secret contents are validated after they are entered.
 
 `--host` replaces the former `--url`: it accepts an IP address or domain without
 protocol, port or path. Host filters combine with exact names and tag
@@ -332,6 +354,8 @@ metadata and its backup; record and tag files are not rewritten. The metadata
 backup is updated first. If changing the primary metadata subsequently fails,
 the original primary remains usable with the old password and `vault recover`
 with the new password can publish the updated backup.
+In one-shot mode, all master-password questions go to stderr, including the new
+password and confirmation questions; redirecting stdout does not hide them.
 
 `vault recover` validates backup authentication and domain invariants before
 replacing damaged or missing files. Damaged originals are copied to unique
@@ -359,7 +383,27 @@ tags such as `#tag-42`. `tag rename <TAG_ID> --name <NAME>` saves that tag under
 the same ID. A damaged catalog is not overwritten by ordinary tag operations;
 `tag recover` explicitly rebuilds it using technical names for the tags currently
 known from records. Names that could not be read from a damaged catalog cannot be
-recovered by this operation.
+recovered by this operation. A missing catalog with evidence of previous tags
+(saved counts, record references or a surviving backup) blocks ordinary catalog
+changes until explicit recovery. A never-created catalog in a new vault remains
+writable. Saving after explicit rebuilding does not overwrite a surviving
+backup when the primary catalog is missing.
+
+## Input and file limits
+
+- Metadata reads are bounded by the fixed maximum size of the current format.
+- Each encrypted records/tag file and its backup is limited to 64 MiB on read
+  and save. Existing files above this size are rejected.
+- SSH files and accumulated SSH stdin input are limited to 1 MiB per part.
+- One-shot secret lines and interactive command/argument lines are limited to
+  1 MiB including line endings. Hidden terminal secrets are checked against
+  1 MiB after terminal input returns.
+- Dictionary files are limited to 16 MiB and 100,000 nonempty entries. The same
+  limits apply when saving a dictionary.
+
+Limits count bytes. Readers enforce limits during reading; damaged-file
+preservation during recovery streams the original to
+disk rather than loading it into memory.
 
 This is a new storage format. Existing `vault.repass` files are not migrated or
 modified automatically; the CLI reports them as unsupported.

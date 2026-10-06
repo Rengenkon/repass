@@ -2,11 +2,13 @@ use crate::dictionary::Dictionary;
 use crate::error::{DictionaryError, GeneratorError};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const MAX_DICTIONARY_BYTES: usize = 16 * 1024 * 1024;
+const MAX_DICTIONARY_ENTRIES: usize = 100_000;
 
 pub struct FileDictionary {
     dictionary: Vec<String>,
@@ -16,18 +18,38 @@ pub struct FileDictionary {
 impl FileDictionary {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, io::Error> {
         let file = File::open(path)?;
-        let mut reader = BufReader::new(file);
+        if file.metadata()?.len() > MAX_DICTIONARY_BYTES as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "dictionary exceeds 16 MiB size limit",
+            ));
+        }
+        let mut reader = BufReader::new(file.take(MAX_DICTIONARY_BYTES as u64 + 1));
         let mut dictionary = Vec::new();
+        let mut total = 0;
         loop {
             let mut buf = String::new();
             let n = reader.read_line(&mut buf)?;
             if n == 0 {
                 break;
             }
+            total += n;
+            if total > MAX_DICTIONARY_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "dictionary exceeds 16 MiB size limit",
+                ));
+            }
             while buf.ends_with(['\n', '\r']) {
                 buf.pop();
             }
             if !buf.is_empty() {
+                if dictionary.len() == MAX_DICTIONARY_ENTRIES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "dictionary exceeds 100000 entry limit",
+                    ));
+                }
                 dictionary.push(buf);
             }
         }
@@ -61,7 +83,21 @@ impl FileDictionary {
     /// represented unambiguously by this format. The target is replaced only
     /// after the complete temporary file has been written and flushed.
     pub fn save_to_path(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        if self.dictionary.len() > MAX_DICTIONARY_ENTRIES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "dictionary exceeds 100000 entry limit",
+            ));
+        }
+        let mut total = 0usize;
         for entry in &self.dictionary {
+            total = total.saturating_add(entry.len()).saturating_add(1);
+            if total > MAX_DICTIONARY_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "dictionary exceeds 16 MiB size limit",
+                ));
+            }
             if entry.is_empty() || entry.contains(['\n', '\r']) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -215,6 +251,36 @@ mod tests {
             "repass-dictionary-{name}-{}-{counter}.txt",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn dictionary_file_limits_reject_oversized_files_entries_and_destructive_saves() {
+        let path = temporary_test_path("limits");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(super::MAX_DICTIONARY_BYTES as u64 + 1)
+            .unwrap();
+        assert!(
+            FileDictionary::from_path(&path)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("16 MiB")
+        );
+        std::fs::write(&path, "x\n".repeat(super::MAX_DICTIONARY_ENTRIES + 1)).unwrap();
+        assert!(
+            FileDictionary::from_path(&path)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("entry limit")
+        );
+        std::fs::write(&path, "keep\n").unwrap();
+        let dictionary =
+            FileDictionary::from_entries(["x".repeat(super::MAX_DICTIONARY_BYTES)]).unwrap();
+        assert!(dictionary.save_to_path(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep\n");
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
